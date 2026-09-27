@@ -5,35 +5,38 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
+	"maps"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 
-	"github.com/ipfs/go-ipfs/core/commands/cmdenv"
-	"github.com/ipfs/go-ipfs/repo"
-	"github.com/ipfs/go-ipfs/repo/fsrepo"
-
+	"github.com/anmitsu/go-shlex"
 	"github.com/elgris/jsondiff"
 	cmds "github.com/ipfs/go-ipfs-cmds"
-	config "github.com/ipfs/go-ipfs-config"
+	config "github.com/ipfs/kubo/config"
+	"github.com/ipfs/kubo/core/commands/cmdenv"
+	"github.com/ipfs/kubo/repo"
+	"github.com/ipfs/kubo/repo/fsrepo"
+	"github.com/libp2p/go-libp2p/core/peer"
 )
 
 // ConfigUpdateOutput is config profile apply command's output
 type ConfigUpdateOutput struct {
-	OldCfg map[string]interface{}
-	NewCfg map[string]interface{}
+	OldCfg map[string]any
+	NewCfg map[string]any
 }
 
 type ConfigField struct {
 	Key   string
-	Value interface{}
+	Value any
 }
 
 const (
 	configBoolOptionName   = "bool"
 	configJSONOptionName   = "json"
 	configDryRunOptionName = "dry-run"
+	configExpandAutoName   = "expand-auto"
 )
 
 var ConfigCmd = &cmds.Command{
@@ -49,13 +52,18 @@ file inside your IPFS repository (IPFS_PATH).
 
 Examples:
 
-Get the value of the 'Datastore.Path' key:
+Get the value of the 'Routing.Type' key:
 
-  $ ipfs config Datastore.Path
+  $ ipfs config Routing.Type
 
-Set the value of the 'Datastore.Path' key:
+Set the value of the 'Routing.Type' key:
 
-  $ ipfs config Datastore.Path ~/.ipfs/datastore
+  $ ipfs config Routing.Type auto
+
+Set multiple values in the 'Addresses.AppendAnnounce' array:
+
+  $ ipfs config Addresses.AppendAnnounce --json \
+      '["/dns4/a.example.com/tcp/4001", "/dns4/b.example.com/tcp/4002"]'
 `,
 	},
 	Subcommands: map[string]*cmds.Command{
@@ -71,6 +79,7 @@ Set the value of the 'Datastore.Path' key:
 	Options: []cmds.Option{
 		cmds.BoolOption(configBoolOptionName, "Set a boolean value."),
 		cmds.BoolOption(configJSONOptionName, "Parse stringified JSON."),
+		cmds.BoolOption(configExpandAutoName, "Expand 'auto' placeholders to their expanded values from AutoConf service."),
 	},
 	Run: func(req *cmds.Request, res cmds.ResponseEmitter, env cmds.Environment) error {
 		args := req.Arguments
@@ -101,10 +110,44 @@ Set the value of the 'Datastore.Path' key:
 		}
 		defer r.Close()
 		if len(args) == 2 {
+			// Check if user is trying to write config with expand flag
+			if expandAuto, _ := req.Options[configExpandAutoName].(bool); expandAuto {
+				return fmt.Errorf("--expand-auto can only be used for reading config values, not for setting them")
+			}
+
 			value := args[1]
 
+			// Identity.PeerID is derived from Identity.PrivKey; the node
+			// refuses to start when they disagree. Accept only the node's own
+			// PeerID in any standard form (base58 or CIDv1), compare decoded
+			// IDs rather than strings, store the canonical base58 string kubo
+			// writes elsewhere, and point a mismatched value at the supported
+			// way to change the identity.
+			if strings.EqualFold(key, "identity.peerid") {
+				candidate := value
+				if parseJSON, _ := req.Options[configJSONOptionName].(bool); parseJSON {
+					var s string
+					if err := json.Unmarshal([]byte(value), &s); err == nil {
+						candidate = s
+					}
+				}
+				id, err := nodePeerID(r)
+				if err != nil {
+					return err
+				}
+				got, err := peer.Decode(candidate)
+				if err != nil || got != id {
+					return errors.New("cannot set Identity.PeerID to a value that does not match the node's private key; use 'ipfs key rotate' to change the node identity")
+				}
+				output, err = setConfig(r, key, id.String())
+				if err != nil {
+					return err
+				}
+				return cmds.EmitOnce(res, output)
+			}
+
 			if parseJSON, _ := req.Options[configJSONOptionName].(bool); parseJSON {
-				var jsonVal interface{}
+				var jsonVal any
 				if err := json.Unmarshal([]byte(value), &jsonVal); err != nil {
 					err = fmt.Errorf("failed to unmarshal json. %s", err)
 					return err
@@ -117,7 +160,13 @@ Set the value of the 'Datastore.Path' key:
 				output, err = setConfig(r, key, value)
 			}
 		} else {
-			output, err = getConfig(r, key)
+			// Check if user wants to expand auto values for getter
+			expandAuto, _ := req.Options[configExpandAutoName].(bool)
+			if expandAuto {
+				output, err = getConfigWithAutoExpand(r, key)
+			} else {
+				output, err = getConfig(r, key)
+			}
 		}
 
 		if err != nil {
@@ -153,6 +202,7 @@ Set the value of the 'Datastore.Path' key:
 // A pattern matches a part if and only if the pattern is "*" or the lowercase pattern equals the lowercase part.
 //
 // For example:
+//
 //	matchesGlobPrefix("foo.bar", []string{"*", "bar", "baz"}) returns true
 //	matchesGlobPrefix("foo.bar.baz", []string{"*", "bar"}) returns true
 //	matchesGlobPrefix("foo.bar", []string{"baz", "*"}) returns false
@@ -179,30 +229,53 @@ var configShowCmd = &cmds.Command{
 NOTE: For security reasons, this command will omit your private key and remote services. If you would like to make a full backup of your config (private key included), you must copy the config file from your repo.
 `,
 	},
-	Type: make(map[string]interface{}),
+	Type: make(map[string]any),
 	Run: func(req *cmds.Request, res cmds.ResponseEmitter, env cmds.Environment) error {
 		cfgRoot, err := cmdenv.GetConfigRoot(env)
 		if err != nil {
 			return err
 		}
 
-		fname, err := config.Filename(cfgRoot)
+		configFileOpt, _ := req.Options[ConfigFileOption].(string)
+		fname, err := config.Filename(cfgRoot, configFileOpt)
 		if err != nil {
 			return err
 		}
 
-		data, err := ioutil.ReadFile(fname)
+		data, err := os.ReadFile(fname)
 		if err != nil {
 			return err
 		}
 
-		var cfg map[string]interface{}
+		var cfg map[string]any
 		err = json.Unmarshal(data, &cfg)
 		if err != nil {
 			return err
 		}
 
+		// Check if user wants to expand auto values
+		expandAuto, _ := req.Options[configExpandAutoName].(bool)
+		if expandAuto {
+			// Load full config to use resolution methods
+			var fullCfg config.Config
+			err = json.Unmarshal(data, &fullCfg)
+			if err != nil {
+				return err
+			}
+
+			// Expand auto values and update the map
+			cfg, err = fullCfg.ExpandAutoConfValues(cfg)
+			if err != nil {
+				return err
+			}
+		}
+
 		cfg, err = scrubValue(cfg, []string{config.IdentityTag, config.PrivKeyTag})
+		if err != nil {
+			return err
+		}
+
+		cfg, err = scrubValue(cfg, []string{config.APITag, config.AuthorizationTag})
 		if err != nil {
 			return err
 		}
@@ -215,48 +288,50 @@ NOTE: For security reasons, this command will omit your private key and remote s
 		return cmds.EmitOnce(res, &cfg)
 	},
 	Encoders: cmds.EncoderMap{
-		cmds.Text: cmds.MakeTypedEncoder(func(req *cmds.Request, w io.Writer, out *map[string]interface{}) error {
-			buf, err := config.HumanOutput(out)
-			if err != nil {
-				return err
-			}
-			buf = append(buf, byte('\n'))
-			_, err = w.Write(buf)
-			return err
-		}),
+		cmds.Text: HumanJSONEncoder,
 	},
 }
 
+var HumanJSONEncoder = cmds.MakeTypedEncoder(func(req *cmds.Request, w io.Writer, out *map[string]any) error {
+	buf, err := config.HumanOutput(out)
+	if err != nil {
+		return err
+	}
+	buf = append(buf, byte('\n'))
+	_, err = w.Write(buf)
+	return err
+})
+
 // Scrubs value and returns error if missing
-func scrubValue(m map[string]interface{}, key []string) (map[string]interface{}, error) {
+func scrubValue(m map[string]any, key []string) (map[string]any, error) {
 	return scrubMapInternal(m, key, false)
 }
 
 // Scrubs value and returns no error if missing
-func scrubOptionalValue(m map[string]interface{}, key []string) (map[string]interface{}, error) {
+func scrubOptionalValue(m map[string]any, key []string) (map[string]any, error) {
 	return scrubMapInternal(m, key, true)
 }
 
-func scrubEither(u interface{}, key []string, okIfMissing bool) (interface{}, error) {
-	m, ok := u.(map[string]interface{})
+func scrubEither(u any, key []string, okIfMissing bool) (any, error) {
+	m, ok := u.(map[string]any)
 	if ok {
 		return scrubMapInternal(m, key, okIfMissing)
 	}
 	return scrubValueInternal(m, key, okIfMissing)
 }
 
-func scrubValueInternal(v interface{}, key []string, okIfMissing bool) (interface{}, error) {
+func scrubValueInternal(v any, key []string, okIfMissing bool) (any, error) {
 	if v == nil && !okIfMissing {
 		return nil, errors.New("failed to find specified key")
 	}
 	return nil, nil
 }
 
-func scrubMapInternal(m map[string]interface{}, key []string, okIfMissing bool) (map[string]interface{}, error) {
+func scrubMapInternal(m map[string]any, key []string, okIfMissing bool) (map[string]any, error) {
 	if len(key) == 0 {
-		return make(map[string]interface{}), nil // delete value
+		return make(map[string]any), nil // delete value
 	}
-	n := map[string]interface{}{}
+	n := map[string]any{}
 	for k, v := range m {
 		if key[0] == "*" || strings.EqualFold(key[0], k) {
 			u, err := scrubEither(v, key[1:], okIfMissing)
@@ -289,7 +364,8 @@ variable set to your preferred text editor.
 			return err
 		}
 
-		filename, err := config.Filename(cfgRoot)
+		configFileOpt, _ := req.Options[ConfigFileOption].(string)
+		filename, err := config.Filename(cfgRoot, configFileOpt)
 		if err != nil {
 			return err
 		}
@@ -304,6 +380,13 @@ var configReplaceCmd = &cmds.Command{
 		ShortDescription: `
 Make sure to back up the config file first if necessary, as this operation
 can't be undone.
+
+The private key cannot be set over the Kubo RPC API. 'ipfs config replace'
+keeps the existing Identity.PrivKey and ignores that field in <file>. It
+then re-derives Identity.PeerID from the stored key, so a different PeerID
+in <file> is overwritten with the one derived from the key on disk.
+
+To change the node's identity, stop the daemon and run 'ipfs key rotate'.
 `,
 	},
 
@@ -403,7 +486,8 @@ var configProfileApplyCmd = &cmds.Command{
 func buildProfileHelp() string {
 	var out string
 
-	for name, profile := range config.Profiles {
+	for _, name := range slices.Sorted(maps.Keys(config.Profiles)) {
+		profile := config.Profiles[name]
 		dlines := strings.Split(profile.Description, "\n")
 		for i := range dlines {
 			dlines[i] = "    " + dlines[i]
@@ -416,7 +500,7 @@ func buildProfileHelp() string {
 }
 
 // scrubPrivKey scrubs private key for security reasons.
-func scrubPrivKey(cfg *config.Config) (map[string]interface{}, error) {
+func scrubPrivKey(cfg *config.Config) (map[string]any, error) {
 	cfgMap, err := config.ToMap(cfg)
 	if err != nil {
 		return nil, err
@@ -458,6 +542,23 @@ func transformConfig(configRoot string, configName string, transformer config.Tr
 		return nil, nil, err
 	}
 
+	// Datastore.Spec describes what is on disk. A profile that changes it
+	// leaves a repo that no longer opens.
+	oldDS, err := fsrepo.AnyDatastoreConfig(oldCfg.Datastore.Spec)
+	if err != nil {
+		return nil, nil, err
+	}
+	newDS, err := fsrepo.AnyDatastoreConfig(newCfg.Datastore.Spec)
+	if err != nil {
+		return nil, nil, err
+	}
+	if oldDS.DiskSpec().String() != newDS.DiskSpec().String() {
+		return nil, nil, fmt.Errorf("profile %q changes the datastore layout, which is fixed when the repo is created. "+
+			"Create a new repo with 'ipfs init --profile=%s' and move your data there "+
+			"with 'ipfs dag export' and 'ipfs dag import', or with 'ipfs pin ls -t recursive' and 'ipfs pin add'",
+			configName, configName)
+	}
+
 	if !dryRun {
 		_, err = r.BackupConfig("pre-" + configName + "-")
 		if err != nil {
@@ -484,12 +585,39 @@ func getConfig(r repo.Repo, key string) (*ConfigField, error) {
 	}, nil
 }
 
-func setConfig(r repo.Repo, key string, value interface{}) (*ConfigField, error) {
+func getConfigWithAutoExpand(r repo.Repo, key string) (*ConfigField, error) {
+	// First get the current value
+	value, err := r.GetConfigKey(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get config value: %q", err)
+	}
+
+	// Load full config for resolution
+	fullCfg, err := r.Config()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load config: %q", err)
+	}
+
+	// Expand auto values based on the key
+	expandedValue := fullCfg.ExpandConfigField(key, value)
+
+	return &ConfigField{
+		Key:   key,
+		Value: expandedValue,
+	}, nil
+}
+
+func setConfig(r repo.Repo, key string, value any) (*ConfigField, error) {
 	err := r.SetConfigKey(key, value)
 	if err != nil {
 		return nil, fmt.Errorf("failed to set config value: %s (maybe use --json?)", err)
 	}
 	return getConfig(r, key)
+}
+
+// parseEditorCommand parses the EDITOR environment variable into command and arguments
+func parseEditorCommand(editor string) ([]string, error) {
+	return shlex.Split(editor, true)
 }
 
 func editConfig(filename string) error {
@@ -498,9 +626,40 @@ func editConfig(filename string) error {
 		return errors.New("ENV variable $EDITOR not set")
 	}
 
-	cmd := exec.Command("sh", "-c", editor+" "+filename)
+	editorAndArgs, err := parseEditorCommand(editor)
+	if err != nil {
+		return fmt.Errorf("cannot parse $EDITOR value: %s", err)
+	}
+	editor = editorAndArgs[0]
+	args := append(editorAndArgs[1:], filename)
+
+	cmd := exec.Command(editor, args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return cmd.Run()
+}
+
+// nodePeerID derives the PeerID implied by the private key stored in the repo
+// config. Identity.PeerID must equal this value; the node refuses to start
+// when the two disagree.
+func nodePeerID(r repo.Repo) (peer.ID, error) {
+	keyF, err := getConfig(r, config.PrivKeySelector)
+	if err != nil {
+		return "", errors.New("failed to get PrivKey")
+	}
+	pkstr, ok := keyF.Value.(string)
+	if !ok {
+		return "", errors.New("private key in config was not a string")
+	}
+	ident := config.Identity{PrivKey: pkstr}
+	pk, err := ident.DecodePrivateKey("")
+	if err != nil {
+		return "", fmt.Errorf("failed to decode PrivKey: %w", err)
+	}
+	id, err := peer.IDFromPrivateKey(pk)
+	if err != nil {
+		return "", fmt.Errorf("failed to derive PeerID from PrivKey: %w", err)
+	}
+	return id, nil
 }
 
 func replaceConfig(r repo.Repo, file io.Reader) error {
@@ -526,6 +685,11 @@ func replaceConfig(r repo.Repo, file io.Reader) error {
 	}
 
 	newCfg.Identity.PrivKey = pkstr
+	id, err := nodePeerID(r)
+	if err != nil {
+		return err
+	}
+	newCfg.Identity.PeerID = id.String()
 
 	// Handle Pinning.RemoteServices (API.Key of each service is a secret)
 
@@ -565,7 +729,7 @@ func getRemotePinningServices(r repo.Repo) (map[string]config.RemotePinningServi
 	if remoteServicesTag, err := getConfig(r, config.RemoteServicesPath); err == nil {
 		// seems that golang cannot type assert map[string]interface{} to map[string]config.RemotePinningService
 		// so we have to manually copy the data :-|
-		if val, ok := remoteServicesTag.Value.(map[string]interface{}); ok {
+		if val, ok := remoteServicesTag.Value.(map[string]any); ok {
 			jsonString, err := json.Marshal(val)
 			if err != nil {
 				return nil, err
@@ -577,5 +741,4 @@ func getRemotePinningServices(r repo.Repo) (map[string]config.RemotePinningServi
 		}
 	}
 	return oldServices, nil
-
 }

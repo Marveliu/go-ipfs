@@ -8,7 +8,7 @@
 # To overwrite a variable, like ExecStart you have to specify it once
 # blank and a second time with a new value, like:
 # ExecStart=
-# ExecStart=/usr/bin/ipfs daemon --flag1 --flag2
+# ExecStart=/usr/local/bin/ipfs daemon --flag1 --flag2
 #
 # For more info about custom unit files see systemd.unit(5).
 
@@ -18,7 +18,7 @@
 
 [Unit]
 Description=InterPlanetary File System (IPFS) daemon
-Documentation=https://docs.ipfs.io/
+Documentation=https://docs.ipfs.tech/
 After=network.target
 
 [Service]
@@ -55,6 +55,12 @@ CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 # enable to specify a higher limit for open files/connections
 #LimitNOFILE=1000000
 
+# enable memory limits on low-memory devices (example values for 8 GiB of RAM)
+# see https://github.com/ipfs/kubo/blob/master/docs/production/low-memory.md
+#Environment=GOMEMLIMIT=4GiB
+#MemoryHigh=6G
+#MemoryMax=7G
+
 #don't use swap
 MemorySwapMax=0
 
@@ -70,7 +76,7 @@ User=ipfs
 Group=ipfs
 StateDirectory=ipfs
 Environment=IPFS_PATH="${HOME}"
-ExecStart=/usr/bin/ipfs daemon --init --migrate
+ExecStart=/usr/local/bin/ipfs daemon --init --migrate
 Restart=on-failure
 KillSignal=SIGINT
 

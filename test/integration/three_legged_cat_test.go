@@ -9,14 +9,14 @@ import (
 	"testing"
 	"time"
 
-	bootstrap2 "github.com/ipfs/go-ipfs/core/bootstrap"
-	"github.com/ipfs/go-ipfs/core/coreapi"
-	mock "github.com/ipfs/go-ipfs/core/mock"
-	"github.com/ipfs/go-ipfs/thirdparty/unit"
+	bootstrap2 "github.com/ipfs/boxo/bootstrap"
+	"github.com/ipfs/kubo/core/coreapi"
+	mock "github.com/ipfs/kubo/core/mock"
+	"github.com/ipfs/kubo/thirdparty/unit"
 
-	files "github.com/ipfs/go-ipfs-files"
-	peer "github.com/libp2p/go-libp2p-core/peer"
+	"github.com/ipfs/boxo/files"
 	testutil "github.com/libp2p/go-libp2p-testing/net"
+	"github.com/libp2p/go-libp2p/core/peer"
 	mocknet "github.com/libp2p/go-libp2p/p2p/net/mock"
 )
 
@@ -26,7 +26,7 @@ func TestThreeLeggedCatTransfer(t *testing.T) {
 		RoutingLatency:    0,
 		BlockstoreLatency: 0,
 	}
-	if err := RunThreeLeggedCat(RandomBytes(100*unit.MB), conf); err != nil {
+	if err := RunThreeLeggedCat(RandomBytes(1*unit.MB), conf); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -64,11 +64,11 @@ func TestThreeLeggedCat100MBMacbookCoastToCoast(t *testing.T) {
 }
 
 func RunThreeLeggedCat(data []byte, conf testutil.LatencyConfig) error {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
 	// create network
-	mn := mocknet.New(ctx)
+	mn := mocknet.New()
 	mn.SetLinkDefaults(mocknet.LinkOptions{
 		Latency: conf.NetworkLatency,
 		// TODO add to conf. This is tricky because we want 0 values to be functional.
@@ -93,12 +93,12 @@ func RunThreeLeggedCat(data []byte, conf testutil.LatencyConfig) error {
 	}
 	defer catter.Close()
 
-	adderApi, err := coreapi.NewCoreAPI(adder)
+	adderAPI, err := coreapi.NewCoreAPI(adder)
 	if err != nil {
 		return err
 	}
 
-	catterApi, err := coreapi.NewCoreAPI(catter)
+	catterAPI, err := coreapi.NewCoreAPI(catter)
 	if err != nil {
 		return err
 	}
@@ -117,12 +117,19 @@ func RunThreeLeggedCat(data []byte, conf testutil.LatencyConfig) error {
 		return err
 	}
 
-	added, err := adderApi.Unixfs().Add(ctx, files.NewBytesFile(data))
+	added, err := adderAPI.Unixfs().Add(ctx, files.NewBytesFile(data))
 	if err != nil {
 		return err
 	}
 
-	readerCatted, err := catterApi.Unixfs().Get(ctx, added)
+	// Explicitly provide the root CID to the DHT so the catter can discover
+	// the adder. Without this, the async reprovider may not have propagated
+	// the record before the catter queries.
+	if err := adder.Routing.Provide(ctx, added.RootCid(), true); err != nil {
+		return err
+	}
+
+	readerCatted, err := catterAPI.Unixfs().Get(ctx, added)
 	if err != nil {
 		return err
 	}

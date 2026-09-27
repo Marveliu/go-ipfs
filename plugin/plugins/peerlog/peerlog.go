@@ -5,13 +5,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	core "github.com/ipfs/go-ipfs/core"
-	plugin "github.com/ipfs/go-ipfs/plugin"
-	logging "github.com/ipfs/go-log"
-	event "github.com/libp2p/go-libp2p-core/event"
-	network "github.com/libp2p/go-libp2p-core/network"
-	"github.com/libp2p/go-libp2p-core/peer"
-	"github.com/libp2p/go-libp2p-core/peerstore"
+	logging "github.com/ipfs/go-log/v2"
+	core "github.com/ipfs/kubo/core"
+	plugin "github.com/ipfs/kubo/plugin"
+	event "github.com/libp2p/go-libp2p/core/event"
+	network "github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/peerstore"
 	"go.uber.org/zap"
 )
 
@@ -20,7 +20,7 @@ var log = logging.Logger("plugin/peerlog")
 type eventType int
 
 var (
-	// size of the event queue buffer
+	// size of the event queue buffer.
 	eventQueueSize = 64 * 1024
 	// number of events to drop when busy.
 	busyDropAmount = eventQueueSize / 8
@@ -39,11 +39,13 @@ type plEvent struct {
 // Log all the PeerIDs. This is considered internal, unsupported, and may break at any point.
 //
 // Usage:
-//   GOLOG_FILE=~/peer.log IPFS_LOGGING_FMT=json ipfs daemon
-// Output:
-//   {"level":"info","ts":"2020-02-10T13:54:26.639Z","logger":"plugin/peerlog","caller":"peerlog/peerlog.go:51","msg":"connected","peer":"QmS2H72gdrekXJggGdE9SunXPntBqdkJdkXQJjuxcH8Cbt"}
-//   {"level":"info","ts":"2020-02-10T13:54:59.095Z","logger":"plugin/peerlog","caller":"peerlog/peerlog.go:56","msg":"identified","peer":"QmS2H72gdrekXJggGdE9SunXPntBqdkJdkXQJjuxcH8Cbt","agent":"go-ipfs/0.5.0/"}
 //
+//	GOLOG_FILE=~/peer.log GOLOG_LOG_FMT=json ipfs daemon
+//
+// Output:
+//
+//	{"level":"info","ts":"2020-02-10T13:54:26.639Z","logger":"plugin/peerlog","caller":"peerlog/peerlog.go:51","msg":"connected","peer":"QmS2H72gdrekXJggGdE9SunXPntBqdkJdkXQJjuxcH8Cbt"}
+//	{"level":"info","ts":"2020-02-10T13:54:59.095Z","logger":"plugin/peerlog","caller":"peerlog/peerlog.go:56","msg":"identified","peer":"QmS2H72gdrekXJggGdE9SunXPntBqdkJdkXQJjuxcH8Cbt","agent":"go-ipfs/0.5.0/"}
 type peerLogPlugin struct {
 	enabled      bool
 	droppedCount uint64
@@ -52,7 +54,7 @@ type peerLogPlugin struct {
 
 var _ plugin.PluginDaemonInternal = (*peerLogPlugin)(nil)
 
-// Plugins is exported list of plugins that will be loaded
+// Plugins is exported list of plugins that will be loaded.
 var Plugins = []plugin.Plugin{
 	&peerLogPlugin{},
 }
@@ -72,12 +74,12 @@ func (*peerLogPlugin) Version() string {
 // since it is internal-only, unsupported functionality.
 // For supported functionality, we should rework the plugin API to support this use case
 // of including plugins that are disabled by default.
-func extractEnabled(config interface{}) bool {
+func extractEnabled(config any) bool {
 	// plugin is disabled by default, unless Enabled=true
 	if config == nil {
 		return false
 	}
-	mapIface, ok := config.(map[string]interface{})
+	mapIface, ok := config.(map[string]any)
 	if !ok {
 		return false
 	}
@@ -92,7 +94,7 @@ func extractEnabled(config interface{}) bool {
 	return enabled
 }
 
-// Init initializes plugin
+// Init initializes plugin.
 func (pl *peerLogPlugin) Init(env *plugin.Environment) error {
 	pl.events = make(chan plEvent, eventQueueSize)
 	pl.enabled = extractEnabled(env.Config)
@@ -121,7 +123,7 @@ func (pl *peerLogPlugin) collectEvents(node *core.IpfsNode) {
 			// don't immediately run into this situation
 			// again.
 		loop:
-			for i := 0; i < busyDropAmount; i++ {
+			for range busyDropAmount {
 				select {
 				case <-pl.events:
 					dropped++
@@ -146,7 +148,7 @@ func (pl *peerLogPlugin) collectEvents(node *core.IpfsNode) {
 		case e = <-pl.events:
 		}
 
-		peerID := zap.String("peer", e.peer.Pretty())
+		peerID := zap.String("peer", e.peer.String())
 
 		switch e.kind {
 		case eventConnect:
@@ -184,7 +186,7 @@ func (pl *peerLogPlugin) Start(node *core.IpfsNode) error {
 		return nil
 	}
 
-	// Ensure logs from this plugin get printed regardless of global IPFS_LOGGING value
+	// Ensure logs from this plugin get printed regardless of global GOLOG_LOG_LEVEL value
 	if err := logging.SetLogLevel("plugin/peerlog", "info"); err != nil {
 		return fmt.Errorf("failed to set log level: %w", err)
 	}

@@ -58,9 +58,9 @@ test_launch_ipfs_daemon
 
 test_expect_success 'Addresses.Announce affects addresses' '
   ipfs swarm addrs local >actual &&
-  grep "/ip4/1.2.3.4/tcp/1234" actual &&
+  test_should_contain "/ip4/1.2.3.4/tcp/1234" actual &&
   ipfs id -f"<addrs>" | xargs -n1 echo >actual &&
-  grep "/ip4/1.2.3.4/tcp/1234" actual
+  test_should_contain "/ip4/1.2.3.4/tcp/1234" actual
 '
 
 test_kill_ipfs_daemon
@@ -81,18 +81,18 @@ test_launch_ipfs_daemon
 
 test_expect_success 'Addresses.AppendAnnounce is applied on top of Announce' '
   ipfs swarm addrs local >actual &&
-  grep "/ip4/1.2.3.4/tcp/1234" actual &&
-  grep "/dnsaddr/dynamic.example.com" actual &&
-  grep "/ip4/10.20.30.40/tcp/4321" actual &&
+  test_should_contain "/ip4/1.2.3.4/tcp/1234" actual &&
+  test_should_contain "/dnsaddr/dynamic.example.com" actual &&
+  test_should_contain "/ip4/10.20.30.40/tcp/4321" actual &&
   ipfs id -f"<addrs>" | xargs -n1 echo | tee actual &&
-  grep "/ip4/1.2.3.4/tcp/1234/p2p" actual &&
-  grep "/dnsaddr/dynamic.example.com/p2p/" actual &&
-  grep "/ip4/10.20.30.40/tcp/4321/p2p/" actual
+  test_should_contain "/ip4/1.2.3.4/tcp/1234/p2p" actual &&
+  test_should_contain "/dnsaddr/dynamic.example.com/p2p/" actual &&
+  test_should_contain "/ip4/10.20.30.40/tcp/4321/p2p/" actual
 '
 
 test_kill_ipfs_daemon
 
-noAnnounceCfg='["/ip4/1.2.3.4/tcp/1234"]'
+noAnnounceCfg='["/ip4/1.2.3.4/tcp/1234", "/ip4/10.20.30.40/tcp/4321"]'
 test_expect_success "test_config_set succeeds" "
   ipfs config --json Addresses.NoAnnounce '$noAnnounceCfg'
 "
@@ -101,11 +101,11 @@ test_launch_ipfs_daemon
 
 test_expect_success "Addresses.NoAnnounce affects addresses from Announce and AppendAnnounce" '
   ipfs swarm addrs local >actual &&
-  grep -v "/ip4/1.2.3.4/tcp/1234" actual &&
-  grep -v "/ip4/10.20.30.40/tcp/4321" actual &&
+  test_should_not_contain "/ip4/1.2.3.4/tcp/1234" actual &&
+  test_should_not_contain "/ip4/10.20.30.40/tcp/4321" actual &&
   ipfs id -f"<addrs>" | xargs -n1 echo >actual &&
-  grep -v "/ip4/1.2.3.4/tcp/1234" actual &&
-  grep -v "//ip4/10.20.30.40/tcp/4321" actual
+  test_should_not_contain "/ip4/1.2.3.4/tcp/1234" actual &&
+  test_should_not_contain "/ip4/10.20.30.40/tcp/4321" actual
 '
 
 test_kill_ipfs_daemon
@@ -119,9 +119,9 @@ test_launch_ipfs_daemon
 
 test_expect_success "Addresses.NoAnnounce with /ipcidr affects addresses" '
   ipfs swarm addrs local >actual &&
-  grep -v "/ip4/1.2.3.4/tcp/1234" actual &&
+  test_should_not_contain "/ip4/1.2.3.4/tcp/1234" actual &&
   ipfs id -f"<addrs>" | xargs -n1 echo >actual &&
-  grep -v "/ip4/1.2.3.4/tcp/1234" actual
+  test_should_not_contain "/ip4/1.2.3.4/tcp/1234" actual
 '
 
 test_kill_ipfs_daemon
@@ -172,8 +172,12 @@ test_expect_success "disconnect work without specifying a transport address" '
   [ $(ipfsi 0 swarm peers | wc -l) -eq 0 ]
 '
 
+# No check for zero peers up front: disconnecting is not permanent, and the DHT
+# keeps the other node in its routing table and re-dials it on any refresh, so
+# by the time this case runs the two may be connected again. The disconnect
+# itself is covered by the case above, and the full disconnect-then-connect
+# cycle by the one below, both inside a single command chain.
 test_expect_success "connect work without specifying a transport address" '
-  [ $(ipfsi 0 swarm peers | wc -l) -eq 0 ] &&
   ipfsi 0 swarm connect "/p2p/$(iptb attr get 1 id)" &&
   [ $(ipfsi 0 swarm peers | wc -l) -eq 1 ]
 '

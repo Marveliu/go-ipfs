@@ -15,7 +15,7 @@ test_expect_success "adding using unsafe function fails with error" '
 '
 
 test_expect_success "error reason is pointed out" '
-  grep "insecure hash functions not allowed" add_out || test_fsh cat add_out
+  grep "potentially insecure hash functions not allowed" add_out || test_fsh cat add_out
 '
 
 test_expect_success "adding using too short of a hash function gives out an error" '
@@ -23,7 +23,7 @@ test_expect_success "adding using too short of a hash function gives out an erro
 '
 
 test_expect_success "error reason is pointed out" '
-  grep "hashes must be at 20 least bytes long" block_out
+  grep "digest too small" block_out
 '
 
 
@@ -35,7 +35,7 @@ test_cat_get() {
 
 
   test_expect_success "error reason is pointed out" '
-    grep "insecure hash functions not allowed" ipfs_cat
+    grep "potentially insecure hash functions not allowed" ipfs_cat
   '
 
 
@@ -45,15 +45,15 @@ test_cat_get() {
     '
 
   test_expect_success "error reason is pointed out" '
-     grep "hashes must be at 20 least bytes long" ipfs_get
+     grep "digest too small" ipfs_get
   '
 }
 
 
 test_gc() {
   test_expect_success "injecting insecure block" '
-    mkdir -p "$IPFS_PATH/blocks/JZ" &&
-    cp -f ../t0275-cid-security-data/AFKSEBCGPUJZE.data "$IPFS_PATH/blocks/JZ"
+    mkdir -p "$IPFS_PATH/blocks/TS" &&
+    cp -f ../t0275-cid-security-data/EICEM7ITSI.data "$IPFS_PATH/blocks/TS"
   '
 
   test_expect_success "gc works" 'ipfs repo gc > gc_out'

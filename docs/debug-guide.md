@@ -1,15 +1,22 @@
 # General performance debugging guidelines
 
-This is a document for helping debug go-ipfs. Please add to it if you can!
+This is a document for helping debug Kubo. Please add to it if you can!
 
-### Table of Contents
-- [Beginning](#beginning)
-- [Analyzing the stack dump](#analyzing-the-stack-dump)
-- [Analyzing the CPU Profile](#analyzing-the-cpu-profile)
-- [Analyzing vars and memory statistics](#analyzing-vars-and-memory-statistics)
-- [Other](#other)
+# Table of Contents
+
+- [General performance debugging guidelines](#general-performance-debugging-guidelines)
+- [Table of Contents](#table-of-contents)
+    - [Beginning](#beginning)
+    - [Known logger subsystems](#known-logger-subsystems)
+    - [Analyzing the stack dump](#analyzing-the-stack-dump)
+    - [Analyzing the CPU Profile](#analyzing-the-cpu-profile)
+    - [Analyzing vars and memory statistics](#analyzing-vars-and-memory-statistics)
+    - [Tracing](#tracing)
+    - [Other](#other)
 
 ### Beginning
+
+> **Note:**  Enable more logs by setting `GOLOG_LOG_LEVEL` env variable when troubleshooting. See [go-log documentation](https://github.com/ipfs/go-log#golog_log_level) for configuration options and available log levels.
 
 When you see ipfs doing something (using lots of CPU, memory, or otherwise
 being weird), the first thing you want to do is gather all the relevant
@@ -31,6 +38,23 @@ If you feel intrepid, you can dump this information and investigate it yourself:
 - system information
   - `ipfs diag sys > ipfs.sysinfo`
 
+
+### Known logger subsystems
+
+`GOLOG_LOG_LEVEL` matches subsystem names exactly (no prefix or wildcard matching beyond `*` for "all subsystems"). The same names work with the runtime command `ipfs log level <subsystem> <level>`. The list below covers the outbound provide/reprovide pipeline, which spans multiple packages and therefore multiple subsystems.
+
+| Subsystem | Source | Purpose |
+| --- | --- | --- |
+| `provider` | kubo `core/node`, boxo `provider` | Kubo provider orchestration (keystore lifecycle, strategy changes, reprovide cycle start/finish, throughput alarms) and boxo's legacy provider system (active when `Provide.DHT.SweepEnabled=false` or for non-DHT routers) |
+| `dht/provider` | `go-libp2p-kad-dht` | Sweep-based DHT provider (active when `Provide.DHT.SweepEnabled=true`, the default), including the buffered wrapper, keystore, and resettable keystore |
+| `dht/provider/lan` | `go-libp2p-kad-dht` (dual) | LAN half of the dual DHT provider; the WAN half reuses `dht/provider` |
+| `dsqueue` | `go-dsqueue` | Generic datastore queue used by the legacy provider queue |
+
+To see everything the provide system emits, for example at `debug` level:
+
+```shell
+GOLOG_LOG_LEVEL="provider=debug,dht/provider=debug,dht/provider/lan=debug" ipfs daemon
+```
 
 ### Analyzing the stack dump
 
@@ -95,8 +119,13 @@ the quickest way to easily point out where the hot spots in the code are.
 
 The output is JSON formatted and includes badger store statistics, the command line run, and the output from Go's [runtime.ReadMemStats](https://golang.org/pkg/runtime/#ReadMemStats). The [MemStats](https://golang.org/pkg/runtime/#MemStats) has useful information about memory allocation and garbage collection.
 
+### Tracing
+
+Experimental tracing via OpenTelemetry suite of tools is available.
+See `tracing/doc.go` for more details.
+
 ### Other
 
-If you have any questions, or want us to analyze some weird go-ipfs behaviour,
+If you have any questions, or want us to analyze some weird kubo behavior,
 just let us know, and be sure to include all the profiling information
 mentioned at the top.

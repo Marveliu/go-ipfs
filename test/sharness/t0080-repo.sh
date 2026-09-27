@@ -8,7 +8,7 @@ test_description="Test ipfs repo operations"
 
 . lib/test-lib.sh
 
-test_init_ipfs
+test_init_ipfs --empty-repo=false
 test_launch_ipfs_daemon_without_network
 
 test_expect_success "'ipfs repo gc' succeeds" '
@@ -30,7 +30,7 @@ test_expect_success "'ipfs repo gc' succeeds" '
 '
 
 test_expect_success "'ipfs repo gc' looks good (patch root)" '
-  grep -v "removed $HASH" gc_out_actual
+  test_should_not_contain "removed $HASH" gc_out_actual
 '
 
 test_expect_success "'ipfs repo gc' doesn't remove file" '
@@ -49,11 +49,22 @@ test_expect_success "'ipfs pin rm' output looks good" '
 
 test_expect_success "ipfs repo gc fully reverse ipfs add (part 1)" '
   ipfs repo gc &&
-  random 100000 41 >gcfile &&
+  random-data -size=100000 -seed=41 >gcfile &&
   find "$IPFS_PATH/blocks" -type f -name "*.data" | sort -u > expected_blocks &&
   hash=$(ipfs add -q gcfile) &&
   ipfs pin rm -r $hash &&
   ipfs repo gc
+'
+test_expect_success "'ipfs repo gc --silent' succeeds (no output)" '
+  echo "should be empty" >bfile &&
+  HASH2=`ipfs add -q bfile` &&
+  ipfs cat "$HASH2" >expected11 &&
+  test_cmp expected11 bfile &&
+  ipfs pin rm -r "$HASH2" &&
+  ipfs repo gc --silent >gc_out_empty &&
+  test_cmp /dev/null gc_out_empty &&
+  test_must_fail ipfs cat "$HASH2" 2>err_expected1 &&
+  grep "Error: block was not found locally (offline): ipld: could not find $HASH2" err_expected1
 '
 
 test_kill_ipfs_daemon
@@ -109,21 +120,29 @@ test_expect_success "remove direct pin" '
 '
 
 test_expect_success "'ipfs repo gc' removes file" '
-  ipfs repo gc >actual7 &&
-  grep "removed $HASH" actual7
+  ipfs block stat $HASH &&
+  ipfs repo gc &&
+  test_must_fail ipfs block stat $HASH
 '
 
+# Convert all to a base32-multihash as refs local outputs cidv1 raw
+# Technically converting refs local output would suffice, but this is more
+# future proof if we ever switch to adding the files with cid-version 1.
 test_expect_success "'ipfs refs local' no longer shows file" '
   EMPTY_DIR=QmUNLLsPACCz1vLxQVkXqqLX5R1X345qqfHbsf67hvA3Nn &&
-  ipfs refs local >actual8 &&
-  grep "QmYCvbfNbCwFR45HiNP45rwJgvatpiW38D961L5qAhUM5Y" actual8 &&
-  grep "$EMPTY_DIR" actual8 &&
-  grep "$HASH_WELCOME_DOCS" actual8 &&
-  test_must_fail grep "$HASH" actual8
+  HASH_MH=`cid-fmt -b base32 "%M" "$HASH"` &&
+  HARDCODED_HASH_MH=`cid-fmt -b base32 "%M" "QmYCvbfNbCwFR45HiNP45rwJgvatpiW38D961L5qAhUM5Y"` &&
+  EMPTY_DIR_MH=`cid-fmt -b base32 "%M" "$EMPTY_DIR"` &&
+  HASH_WELCOME_DOCS_MH=`cid-fmt -b base32 "%M" "$HASH_WELCOME_DOCS"` &&
+  ipfs refs local | cid-fmt -b base32 --filter "%M" >actual8 &&
+  grep "$HARDCODED_HASH_MH" actual8 &&
+  grep "$EMPTY_DIR_MH" actual8 &&
+  grep "$HASH_WELCOME_DOCS_MH" actual8 &&
+  test_must_fail grep "$HASH_MH" actual8
 '
 
 test_expect_success "adding multiblock random file succeeds" '
-  random 1000000 >multiblock &&
+  random-data -size=1000000 >multiblock &&
   MBLOCKHASH=`ipfs add -q multiblock`
 '
 
@@ -265,11 +284,11 @@ test_expect_success "'ipfs repo stat --size-only' succeeds" '
 '
 
 test_expect_success "repo stats came out correct for --size-only" '
-  grep "RepoSize" repo-stats-size-only &&
-  grep "StorageMax" repo-stats-size-only &&
-  grep -v "RepoPath" repo-stats-size-only &&
-  grep -v "NumObjects" repo-stats-size-only &&
-  grep -v "Version" repo-stats-size-only
+  test_should_contain "RepoSize" repo-stats-size-only &&
+  test_should_contain "StorageMax" repo-stats-size-only &&
+  test_should_not_contain "RepoPath" repo-stats-size-only &&
+  test_should_not_contain "NumObjects" repo-stats-size-only &&
+  test_should_not_contain "Version" repo-stats-size-only
 '
 
 test_expect_success "'ipfs repo version' succeeds" '

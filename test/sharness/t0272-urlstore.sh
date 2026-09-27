@@ -10,9 +10,9 @@ test_description="Test out the urlstore functionality"
 
 
 test_expect_success "create some random files" '
-  random 2222     7 > file1 &&
-  random 500000   7 > file2 &&
-  random 50000000 7 > file3
+  random-data -size=2222     -seed=7 > file1 &&
+  random-data -size=500000   -seed=7 > file2 &&
+  random-data -size=50000000 -seed=7 > file3
 '
 
 test_urlstore() {
@@ -69,9 +69,9 @@ test_urlstore() {
   '
 
   cat <<EOF | sort > ls_expect
-bafkreiafqvawjpukk4achpu7edu4d6x5dbzwgigl6nxunjif3ser6bnfpu 262144 http://127.0.0.1:$GWAY_PORT/ipfs/QmUow2T4P69nEsqTQDZCt8yg9CPS8GFmpuDAr5YtsPhTdM 0
-bafkreia46t3jwchosehfcq7kponx26shcjkatxek4m2tzzd67i6o3frpou 237856 http://127.0.0.1:$GWAY_PORT/ipfs/QmUow2T4P69nEsqTQDZCt8yg9CPS8GFmpuDAr5YtsPhTdM 262144
-bafkreiga7ukbxrxs26fiseijjd7zdd6gmlrmnxhalwfbagxwjv7ck4o34a   2222 http://127.0.0.1:$GWAY_PORT/ipfs/QmcHm3BL2cXuQ6rJdKQgPrmT9suqGkfy2KzH3MkXPEBXU6 0
+bafkreiboutgcyqmypfgivgtv6myrgzetgxqmifnzsk32kwrqgo3r2qdiue 237856 http://127.0.0.1:$GWAY_PORT/ipfs/QmXCpfK6wwEeFCHDFcXgLsg8njzLhF81iDEvkka75vVdGR 262144
+bafkreic57mjykimhyhgce6ool4y4jayrb43bqk5c4frywn6yxa4k724ll4 262144 http://127.0.0.1:$GWAY_PORT/ipfs/QmXCpfK6wwEeFCHDFcXgLsg8njzLhF81iDEvkka75vVdGR 0
+bafkreihlljddclccvh7zvctdmeqgpnvmw3jponnfapm4r6o7tamektsz5a   2222 http://127.0.0.1:$GWAY_PORT/ipfs/QmY7HZ3cPJPxzjMZeixDtbvEk8eyExVFDR189Dpavcoqyg 0
 EOF
 
   test_expect_success "ipfs filestore ls works with urls" '
@@ -80,9 +80,9 @@ EOF
   '
 
   cat <<EOF | sort > verify_expect
-ok      bafkreiafqvawjpukk4achpu7edu4d6x5dbzwgigl6nxunjif3ser6bnfpu 262144 http://127.0.0.1:$GWAY_PORT/ipfs/QmUow2T4P69nEsqTQDZCt8yg9CPS8GFmpuDAr5YtsPhTdM 0
-ok      bafkreia46t3jwchosehfcq7kponx26shcjkatxek4m2tzzd67i6o3frpou 237856 http://127.0.0.1:$GWAY_PORT/ipfs/QmUow2T4P69nEsqTQDZCt8yg9CPS8GFmpuDAr5YtsPhTdM 262144
-ok      bafkreiga7ukbxrxs26fiseijjd7zdd6gmlrmnxhalwfbagxwjv7ck4o34a   2222 http://127.0.0.1:$GWAY_PORT/ipfs/QmcHm3BL2cXuQ6rJdKQgPrmT9suqGkfy2KzH3MkXPEBXU6 0
+ok      bafkreiboutgcyqmypfgivgtv6myrgzetgxqmifnzsk32kwrqgo3r2qdiue 237856 http://127.0.0.1:$GWAY_PORT/ipfs/QmXCpfK6wwEeFCHDFcXgLsg8njzLhF81iDEvkka75vVdGR 262144
+ok      bafkreic57mjykimhyhgce6ool4y4jayrb43bqk5c4frywn6yxa4k724ll4 262144 http://127.0.0.1:$GWAY_PORT/ipfs/QmXCpfK6wwEeFCHDFcXgLsg8njzLhF81iDEvkka75vVdGR 0
+ok      bafkreihlljddclccvh7zvctdmeqgpnvmw3jponnfapm4r6o7tamektsz5a   2222 http://127.0.0.1:$GWAY_PORT/ipfs/QmY7HZ3cPJPxzjMZeixDtbvEk8eyExVFDR189Dpavcoqyg 0
 EOF
   
   test_expect_success "ipfs filestore verify works with urls" '
@@ -116,8 +116,8 @@ EOF
   '
 
   cat <<EOF | sort > verify_expect_2
-error   bafkreiafqvawjpukk4achpu7edu4d6x5dbzwgigl6nxunjif3ser6bnfpu 262144 http://127.0.0.1:$GWAY_PORT/ipfs/QmUow2T4P69nEsqTQDZCt8yg9CPS8GFmpuDAr5YtsPhTdM 0
-error   bafkreia46t3jwchosehfcq7kponx26shcjkatxek4m2tzzd67i6o3frpou 237856 http://127.0.0.1:$GWAY_PORT/ipfs/QmUow2T4P69nEsqTQDZCt8yg9CPS8GFmpuDAr5YtsPhTdM 262144
+error   bafkreiboutgcyqmypfgivgtv6myrgzetgxqmifnzsk32kwrqgo3r2qdiue 237856 http://127.0.0.1:$GWAY_PORT/ipfs/QmXCpfK6wwEeFCHDFcXgLsg8njzLhF81iDEvkka75vVdGR 262144
+error   bafkreic57mjykimhyhgce6ool4y4jayrb43bqk5c4frywn6yxa4k724ll4 262144 http://127.0.0.1:$GWAY_PORT/ipfs/QmXCpfK6wwEeFCHDFcXgLsg8njzLhF81iDEvkka75vVdGR 0
 EOF
   
   test_expect_success "ipfs filestore verify is correct" '
@@ -191,7 +191,6 @@ EOF
   '
 }
 
-test_urlstore urlstore add
 test_urlstore add -q --nocopy --cid-version=1
 
 test_done

@@ -6,157 +6,153 @@
 
 test_description="Test add -w"
 
-add_w_m='QmazHkwx6mPmmCEi1jR5YzjjQd1g5XzKfYQLzRAg7x5uUk'
+add_w_m='QmVFBKBbdv7HoMdjTT7adMyUsTvY4tVyr6aPTgrCWyFQo6'
 
-add_w_1='added Qme987pqNBhZZXy4ckeXiR7zaRQwBabB7fTgHurW2yJfNu 4r93
-added Qmf82PSsMpUHcrqxa69KG6Qp5yeK7K9BTizXgG3nvzWcNG '
+add_w_1='added Qmb2LTzn7Yo2LHgmLUaHbaWuNGfVKS25sMYqK52okGa4yd 8e6j_
+added QmcwexGV5CFFN1SqQNXqBhzbC6AxtXBdFm7Dv61VtLBTHU '
 
-add_w_12='added Qme987pqNBhZZXy4ckeXiR7zaRQwBabB7fTgHurW2yJfNu 4r93
-added QmVb4ntSZZnT2J2zvCmXKMJc52cmZYH6AB37MzeYewnkjs 4u6ead
-added QmZPASVB6EsADrLN8S2sak34zEHL8mx4TAVsPJU9cNnQQJ '
+add_w_12='added Qmb2LTzn7Yo2LHgmLUaHbaWuNGfVKS25sMYqK52okGa4yd 8e6j_
+added QmcytURLVEAaNDiNzWU5pZhL8MCTNmmiXrkF2ekPF4ZkNw ewxbo-p_ebq1k6z
+added Qme6uNAJHyjjdJSHwejw4GK3fEtzrPA9rTNbBWVW8cJNqV '
 
-add_w_21='added Qme987pqNBhZZXy4ckeXiR7zaRQwBabB7fTgHurW2yJfNu 4r93
-added QmVb4ntSZZnT2J2zvCmXKMJc52cmZYH6AB37MzeYewnkjs 4u6ead
-added QmZPASVB6EsADrLN8S2sak34zEHL8mx4TAVsPJU9cNnQQJ '
+add_w_d1='added QmReS7VZaSdf3ik6qJqcKka79hZoaZxt68RzxpeRM6vhcY efis44rh5jq69/4e9ygub65pqnd
+added Qmegpr1gVLrkVeWmXCYmZVkJ3cNHcjKEi1RBRqE68UY9A7 efis44rh5jq69/eltgzx
+added QmQ2szbNCuejR793HvBZ6pwpAPSTmomuCqvoUzoasqSAjw efis44rh5jq69/kv90ww6n0j
+added QmaKAczxkiJFVpATJiZGnJ3eoS5wY3HhiLCFftCfgo47QM efis44rh5jq69/vrlkd8mxt8cty7
+added QmXRAAykFSGPY3DGJJHV92FvKr4UcanfhZMdTGHiPAZEad efis44rh5jq69/wn2878
+added QmUrRLM2ZVy9b553e1EDgaCKyeNq3sTFb94U7dk6F2Zzcp efis44rh5jq69
+added QmdNfMuS4Bui9esinhVCEPBvKPeCxe2694sF6AwiCLC9ix '
 
-add_w_d1='added QmPcaX84tDiTfzdTn8GQxexodgeWH6mHjSss5Zfr5ojssb _jo7/-s782qgs
-added QmaVBqquUuXKjkyWHXaXfsaQUxAnsCKS95VRDHU8PzGA4K _jo7/15totauzkak-
-added QmaAHFG8cmhW3WLjofx5siSp44VV25ETN6ThzrU8iAqpkR _jo7/galecuirrj4r
-added QmeuSfhJNKwBESp1W9H8cfoMdBfW3AeHQDWXbNXQJYWp53 _jo7/mzo50r-1xidf5zx
-added QmYC3u5jGWuyFwvTxtvLYm2K3SpWZ31tg3NjpVVvh9cJaJ _jo7/wzvsihy
-added QmQkib3f9XNX5sj6WEahLUPFpheTcwSRJwUCSvjcv8b9by _jo7
-added QmNQoesMj1qp8ApE51NbtTjFYksyzkezPD4cat7V2kzbKN '
+add_w_d1_v1='added bafkreic4faiiaj2arxtiifvaskyj23cvfk26mr7gx7cy7h3pbyt7c5o7yy ks-7mqkzt29b2q/b-o3l9oc
+added bafkreif37syqi44bdbsfi4ewhijlmxwhr4v3mrjjdururm5igvarzdd36u ks-7mqkzt29b2q/gdntkjcg26dvu27d
+added bafkreie43jg3hzmkfdwippgyd4xza3rucauu4juw6dj4smbspkdsosbhte ks-7mqkzt29b2q/lc9jj
+added bafkreiekjb6ae4dr6bfa6msnnulnla6zwikfhalgduuert5uiauua36cru ks-7mqkzt29b2q/u3mk_g-o61c4x
+added bafkreifsgblf5nddvqpioje77fzu3arf4d4t4nt2h5e3lgmxx5izfzcjxy ks-7mqkzt29b2q/w44jbb0oc6
+added bafybeidoqcknpakdk66xyii3vkiv7jkipu234xnw5jj6f6hjofictaasni ks-7mqkzt29b2q
+added bafybeic2j5ttfehhhcti236asobqipzcb7tmuejkrcrw7ia22ykfenj5ly '
 
-add_w_d1_v1='added bafkreif7rizm7yeem72okzlwr2ls73cyemfyv5mjghdew3kzhtfznzz4dq _jo7/-s782qgs
-added bafkreifkecyeevzcocvjliaz3ssiej5tkp32xyuogizonybihapdzovlsu _jo7/15totauzkak-
-added bafkreif5xhyhjhqp3muvj52wp37nutafsznckeuhikrl3h6w2sx3xdyeqm _jo7/galecuirrj4r
-added bafkreia6ooswgjtadq5n5zxkn2qyw3dpuyutvam7grtxn36ywykv52vkje _jo7/mzo50r-1xidf5zx
-added bafkreibhvbkg6zgra4bu56a36h25g52g6yxsb25qvgqv2trx4zbmhkmxku _jo7/wzvsihy
-added bafybeietuhja6ipwwnxefjecz6c5yls4j4q7r5gxiesyzfzkwsaimpa5mu _jo7
-added bafybeihxnrujsxdwyzuf3rq6wigzitrj6vjvxphttrtsx6tqabzpqfbd54 '
+add_w_d2='added QmPHk2wm2iWm6qnVq3GNob4Qg6kwJJmv4fZrje4mouEeTh -ydbcn6
+added Qmb2LTzn7Yo2LHgmLUaHbaWuNGfVKS25sMYqK52okGa4yd 8e6j_
+added QmU4tJkTCtGzkmiYmrNBbEmAW7MXQEjsois3uwVfmyELPC ks-7mqkzt29b2q/b-o3l9oc
+added QmW5446N9DuGrAvfxhc74cG6MPk1uoXPwZKAhXPttBZwvo ks-7mqkzt29b2q/gdntkjcg26dvu27d
+added QmVLtgkve9nbJRxSv4FNL1a4X1gvmbLU7y6Xgaa9zc6GCZ ks-7mqkzt29b2q/lc9jj
+added QmX4xbmXU77EkvBTV5v4FpXtV6naNkYuhV3foGasLG1FoE ks-7mqkzt29b2q/u3mk_g-o61c4x
+added QmQTHSB5azu1ni3aSaZk9XCNW5suJv4QfmFJV8oM8rnSNM ks-7mqkzt29b2q/w44jbb0oc6
+added QmfSUVemMEcSaZ7r7mFvyuGaPGiRckMhrZCYhrwsyza8o8 ndmuvqny42hqhc/-q5qip
+added QmXbw2ApWBFHEtibxCKDNR4vGtsPS9SHnMUNSrb3pmcfoV ndmuvqny42hqhc/f-v9
+added QmZoYh5nT8Yy8kx68c89tYetwhpF59psakvfNfkwS6jAqM ndmuvqny42hqhc/izsy8d_n0uke3s-k
+added QmX2myYx9TSXmaFR8NoP7Zc2BQDUYyCYp8tPHnA8v14pux ndmuvqny42hqhc/nmg0an87ivw
+added QmbpDTAwTGbhsxPD7Y3YSJUdppMRwEVtwpgaYDsJaXcTAq ndmuvqny42hqhc/y508xc5ex
+added Qme3zK228nJztwRqSZShCvoxnixK7JLUSTdHJGth2aaDBX ks-7mqkzt29b2q
+added QmPRfbjzfU2qW4XfFYqWMHC8YaRPjcPQ3y8qmsRgdrB1f7 ndmuvqny42hqhc
+added QmexKKqpqkjcUS1xsaDv2pwPKWg8nSVeADuKk8bFd3nrZG '
 
-add_w_d2='added Qme987pqNBhZZXy4ckeXiR7zaRQwBabB7fTgHurW2yJfNu 4r93
-added QmU9Jqks8TPu4vFr6t7EKkAKQrSJuEujNj1AkzoCeTEDFJ gnz66h/1k0xpx34
-added QmSLYZycXAufRw3ePMVH2brbtYWCcWsmksGLbHcT8ia9Ke gnz66h/9cwudvacx
-added QmfYmpCCAMU9nLe7xbrYsHf5z2R2GxeQnsm4zavUhX9vq2 gnz66h/9ximv51cbo8
-added QmWgEE4e2kfx3b8HZcBk5cLrfhoi8kTMQP2MipgPhykuV3 gnz66h/b54ygh6gs
-added QmcLbqEqhREGednc6mrVtanee4WHKp5JnUfiwTTHCJwuDf gnz66h/lbl5
-added QmPcaX84tDiTfzdTn8GQxexodgeWH6mHjSss5Zfr5ojssb _jo7/-s782qgs
-added QmaVBqquUuXKjkyWHXaXfsaQUxAnsCKS95VRDHU8PzGA4K _jo7/15totauzkak-
-added QmaAHFG8cmhW3WLjofx5siSp44VV25ETN6ThzrU8iAqpkR _jo7/galecuirrj4r
-added QmeuSfhJNKwBESp1W9H8cfoMdBfW3AeHQDWXbNXQJYWp53 _jo7/mzo50r-1xidf5zx
-added QmYC3u5jGWuyFwvTxtvLYm2K3SpWZ31tg3NjpVVvh9cJaJ _jo7/wzvsihy
-added QmVaKAt2eVftNKFfKhiBV7Mu5HjCugffuLqWqobSSFgiA7 h3qpecj0
-added QmQkib3f9XNX5sj6WEahLUPFpheTcwSRJwUCSvjcv8b9by _jo7
-added QmVPwNy8pZegpsNmsjjZvdTQn4uCeuZgtzhgWhRSQWjK9x gnz66h
-added QmTmc46fhKC8Liuh5soy1VotdnHcqLu3r6HpPGwDZCnqL1 '
-
-add_w_r='QmcCksBMDuuyuyfAMMNzEAx6Z7jTrdRy9a23WpufAhG9ji'
+add_w_r='QmW7rkP394QujXBQJAhgDpZ8eEYWHw9bTcpYmNU7Qs1Ugp'
 
 . lib/test-lib.sh
 
 test_add_w() {
 
-  test_expect_success "go-random-files is installed" '
+  test_expect_success "random-files is installed" '
     type random-files
   '
 
   test_expect_success "random-files generates test files" '
     random-files --seed 7547632 --files 5 --dirs 2 --depth 3 m &&
     echo "$add_w_m" >expected &&
-    ipfs add -Q -r m >actual &&
-    test_sort_cmp expected actual
+    ipfs add -Q -r m >actual_w_m &&
+    test_sort_cmp expected actual_w_m
   '
 
   # test single file
   test_expect_success "ipfs add -w (single file) succeeds" '
-    ipfs add -w m/4r93 >actual
+    ipfs add -w m/8e6j_ >actual_w_1
   '
 
   test_expect_success "ipfs add -w (single file) is correct" '
     echo "$add_w_1" >expected &&
-    test_sort_cmp expected actual
+    test_sort_cmp expected actual_w_1
   '
 
   # test two files together
   test_expect_success "ipfs add -w (multiple) succeeds" '
-    ipfs add -w m/4r93 m/4u6ead >actual
+    ipfs add -w m/8e6j_ m/ewxbo-p_ebq1k6z >actual_w_12
   '
 
   test_expect_success "ipfs add -w (multiple) is correct" '
     echo "$add_w_12" >expected  &&
-    test_sort_cmp expected actual
+    test_sort_cmp expected actual_w_12
   '
 
   test_expect_success "ipfs add -w (multiple) succeeds" '
-    ipfs add -w m/4u6ead m/4r93 >actual
+    ipfs add -w m/ewxbo-p_ebq1k6z m/8e6j_ >actual_w_12_a
   '
 
   test_expect_success "ipfs add -w (multiple) orders" '
-    echo "$add_w_21" >expected  &&
-    test_sort_cmp expected actual
+    echo "$add_w_12" >expected  &&
+    test_sort_cmp expected actual_w_12_a
   '
 
   # test a directory
   test_expect_success "ipfs add -w -r (dir) succeeds" '
-    ipfs add -r -w m/t_1wp-8a2/_jo7 >actual
+    ipfs add -r -w m/j2x5evmf3iu_99-n/efis44rh5jq69 >actual_w_d1
   '
 
   test_expect_success "ipfs add -w -r (dir) is correct" '
     echo "$add_w_d1" >expected &&
-    test_sort_cmp expected actual
+    test_sort_cmp expected actual_w_d1
   '
 
   # test files and directory
   test_expect_success "ipfs add -w -r <many> succeeds" '
-    ipfs add -w -r m/t_1wp-8a2/h3qpecj0 \
-      m/ha6f0x7su6/gnz66h m/t_1wp-8a2/_jo7 m/4r93 >actual
+    ipfs add -w -r m/j2x5evmf3iu_99-n/-ydbcn6 \
+      m/phtgkon/ndmuvqny42hqhc m/j2x5evmf3iu_99-n/ks-7mqkzt29b2q m/8e6j_ >actual_w_d2
   '
 
   test_expect_success "ipfs add -w -r <many> is correct" '
     echo "$add_w_d2" >expected &&
-    test_sort_cmp expected actual
+    test_sort_cmp expected actual_w_d2
   '
 
   # test -w -r m/* == -r m
   test_expect_success "ipfs add -w -r m/* == add -r m  succeeds" '
-    ipfs add -Q -w -r m/* >actual
+    ipfs add -Q -w -r m/* >actual_w_m2
   '
 
   test_expect_success "ipfs add -w -r m/* == add -r m  is correct" '
     echo "$add_w_m" >expected &&
-    test_sort_cmp expected actual
+    test_sort_cmp expected actual_w_m2
   '
 
   # test repeats together
   test_expect_success "ipfs add -w (repeats) succeeds" '
-    ipfs add -Q -w -r m/t_1wp-8a2/h3qpecj0 m/ha6f0x7su6/gnz66h \
-      m/t_1wp-8a2/_jo7 m/4r93 m/t_1wp-8a2 m/t_1wp-8a2 m/4r93 \
-      m/4r93 m/ha6f0x7su6/_rwujlf3qh_g08 \
-      m/ha6f0x7su6/gnz66h/9cwudvacx >actual
+    ipfs add -Q -w -r m/j2x5evmf3iu_99-n/-ydbcn6 m/phtgkon/ndmuvqny42hqhc \
+      m/j2x5evmf3iu_99-n/ks-7mqkzt29b2q m/8e6j_ m/j2x5evmf3iu_99-n m/j2x5evmf3iu_99-n m/8e6j_ \
+      m/8e6j_ m/phtgkon/1g-nsct \
+      m/phtgkon/ndmuvqny42hqhc/-q5qip >actual_w_r
   '
 
   test_expect_success "ipfs add -w (repeats) is correct" '
     echo "$add_w_r" >expected  &&
-    test_sort_cmp expected actual
+    test_sort_cmp expected actual_w_r
   '
 
   test_expect_success "ipfs add -w -r (dir) --cid-version=1 succeeds" '
-    ipfs add -r -w --cid-version=1 m/t_1wp-8a2/_jo7 >actual
+    ipfs add -r -w --cid-version=1 m/j2x5evmf3iu_99-n/ks-7mqkzt29b2q >actual_w_d1_v1
   '
 
   test_expect_success "ipfs add -w -r (dir) --cid-version=1 is correct" '
     echo "$add_w_d1_v1" >expected &&
-    test_sort_cmp expected actual
+    test_sort_cmp expected actual_w_d1_v1
   '
 
   test_expect_success "ipfs add -w -r -n (dir) --cid-version=1 succeeds" '
-    ipfs add -r -w -n --cid-version=1 m/t_1wp-8a2/_jo7 >actual
+    ipfs add -r -w -n --cid-version=1 m/j2x5evmf3iu_99-n/ks-7mqkzt29b2q >actual_w_d1_v2
   '
 
   test_expect_success "ipfs add -w -r -n (dir) --cid-version=1 is correct" '
     echo "$add_w_d1_v1" > expected &&
-    test_sort_cmp expected actual
+    test_sort_cmp expected actual_w_d1_v2
   '
 }
 

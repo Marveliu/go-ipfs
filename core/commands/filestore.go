@@ -6,13 +6,12 @@ import (
 	"io"
 	"os"
 
-	filestore "github.com/ipfs/go-filestore"
+	filestore "github.com/ipfs/boxo/filestore"
 	cmds "github.com/ipfs/go-ipfs-cmds"
-	core "github.com/ipfs/go-ipfs/core"
-	cmdenv "github.com/ipfs/go-ipfs/core/commands/cmdenv"
-	e "github.com/ipfs/go-ipfs/core/commands/e"
-
-	"github.com/ipfs/go-cid"
+	core "github.com/ipfs/kubo/core"
+	cmdenv "github.com/ipfs/kubo/core/commands/cmdenv"
+	"github.com/ipfs/kubo/core/commands/cmdutils"
+	e "github.com/ipfs/kubo/core/commands/e"
 )
 
 var FileStoreCmd = &cmds.Command{
@@ -27,7 +26,8 @@ var FileStoreCmd = &cmds.Command{
 }
 
 const (
-	fileOrderOptionName = "file-order"
+	fileOrderOptionName       = "file-order"
+	removeBadBlocksOptionName = "remove-bad-blocks"
 )
 
 var lsFileStore = &cmds.Command{
@@ -57,7 +57,7 @@ The output is:
 		}
 		args := req.Arguments
 		if len(args) > 0 {
-			return listByArgs(req.Context, res, fs, args)
+			return listByArgs(req.Context, res, fs, args, false)
 		}
 
 		fileOrder, _ := req.Options[fileOrderOptionName].(bool)
@@ -84,7 +84,7 @@ The output is:
 			if err != nil {
 				return err
 			}
-			return streamResult(func(v interface{}, out io.Writer) nonFatalError {
+			return streamResult(func(v any, out io.Writer) nonFatalError {
 				r := v.(*filestore.ListRes)
 				if r.ErrorMsg != "" {
 					return nonFatalError(r.ErrorMsg)
@@ -108,7 +108,7 @@ otherwise verify all objects.
 
 The output is:
 
-<status> <hash> <size> <path> <offset>
+<status> <hash> <size> <path> <offset> [<action>]
 
 Where <status> is one of:
 ok:       the block can be reconstructed
@@ -118,6 +118,10 @@ error:    there was some other problem reading the file
 missing:  <obj> could not be found in the filestore
 ERROR:    internal error, most likely due to a corrupt database
 
+Where <action> is present only when removing bad blocks and is one of:
+remove:   link to the block will be removed from datastore
+keep:     keep link, nothing to do
+
 For ERROR entries the error will also be printed to stderr.
 `,
 	},
@@ -126,15 +130,18 @@ For ERROR entries the error will also be printed to stderr.
 	},
 	Options: []cmds.Option{
 		cmds.BoolOption(fileOrderOptionName, "verify the objects based on the order of the backing file"),
+		cmds.BoolOption(removeBadBlocksOptionName, "remove bad blocks. WARNING: This may remove pinned data. You should run 'ipfs pin verify' after running this command and correct any issues."),
 	},
 	Run: func(req *cmds.Request, res cmds.ResponseEmitter, env cmds.Environment) error {
 		_, fs, err := getFilestore(env)
 		if err != nil {
 			return err
 		}
+
+		removeBadBlocks, _ := req.Options[removeBadBlocksOptionName].(bool)
 		args := req.Arguments
 		if len(args) > 0 {
-			return listByArgs(req.Context, res, fs, args)
+			return listByArgs(req.Context, res, fs, args, removeBadBlocks)
 		}
 
 		fileOrder, _ := req.Options[fileOrderOptionName].(bool)
@@ -148,7 +155,14 @@ For ERROR entries the error will also be printed to stderr.
 			if r == nil {
 				break
 			}
-			if err := res.Emit(r); err != nil {
+
+			if removeBadBlocks && (r.Status != filestore.StatusOk) && (r.Status != filestore.StatusOtherError) {
+				if err = fs.FileManager().DeleteBlock(req.Context, r.Key); err != nil {
+					return err
+				}
+			}
+
+			if err = res.Emit(r); err != nil {
 				return err
 			}
 		}
@@ -162,6 +176,8 @@ For ERROR entries the error will also be printed to stderr.
 				return err
 			}
 
+			req := res.Request()
+			removeBadBlocks, _ := req.Options[removeBadBlocksOptionName].(bool)
 			for {
 				v, err := res.Next()
 				if err != nil {
@@ -179,7 +195,16 @@ For ERROR entries the error will also be printed to stderr.
 				if list.Status == filestore.StatusOtherError {
 					fmt.Fprintf(os.Stderr, "%s\n", list.ErrorMsg)
 				}
-				fmt.Fprintf(os.Stdout, "%s %s\n", list.Status.Format(), list.FormatLong(enc.Encode))
+
+				if removeBadBlocks {
+					action := "keep"
+					if removeBadBlocks && (list.Status != filestore.StatusOk) && (list.Status != filestore.StatusOtherError) {
+						action = "remove"
+					}
+					fmt.Fprintf(os.Stdout, "%s %s %s\n", list.Status.Format(), list.FormatLong(enc.Encode), action)
+				} else {
+					fmt.Fprintf(os.Stdout, "%s %s\n", list.Status.Format(), list.FormatLong(enc.Encode))
+				}
 			}
 		},
 	},
@@ -236,9 +261,9 @@ func getFilestore(env cmds.Environment) (*core.IpfsNode, *filestore.Filestore, e
 	return n, fs, err
 }
 
-func listByArgs(ctx context.Context, res cmds.ResponseEmitter, fs *filestore.Filestore, args []string) error {
+func listByArgs(ctx context.Context, res cmds.ResponseEmitter, fs *filestore.Filestore, args []string, removeBadBlocks bool) error {
 	for _, arg := range args {
-		c, err := cid.Decode(arg)
+		c, err := cmdutils.CidFromArg(arg)
 		if err != nil {
 			ret := &filestore.ListRes{
 				Status:   filestore.StatusOtherError,
@@ -250,7 +275,14 @@ func listByArgs(ctx context.Context, res cmds.ResponseEmitter, fs *filestore.Fil
 			continue
 		}
 		r := filestore.Verify(ctx, fs, c)
-		if err := res.Emit(r); err != nil {
+
+		if removeBadBlocks && (r.Status != filestore.StatusOk) && (r.Status != filestore.StatusOtherError) {
+			if err = fs.FileManager().DeleteBlock(ctx, r.Key); err != nil {
+				return err
+			}
+		}
+
+		if err = res.Emit(r); err != nil {
 			return err
 		}
 	}

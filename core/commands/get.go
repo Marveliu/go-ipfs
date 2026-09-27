@@ -1,6 +1,7 @@
 package commands
 
 import (
+	gotar "archive/tar"
 	"bufio"
 	"compress/gzip"
 	"errors"
@@ -11,14 +12,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ipfs/go-ipfs/core/commands/cmdenv"
-	"github.com/ipfs/go-ipfs/core/commands/e"
+	"github.com/ipfs/kubo/core/commands/cmdenv"
+	"github.com/ipfs/kubo/core/commands/cmdutils"
+	"github.com/ipfs/kubo/core/commands/e"
 
-	"github.com/cheggaaa/pb"
+	"github.com/cheggaaa/pb/v3"
+	"github.com/ipfs/boxo/files"
+	"github.com/ipfs/boxo/tar"
 	cmds "github.com/ipfs/go-ipfs-cmds"
-	files "github.com/ipfs/go-ipfs-files"
-	"github.com/ipfs/interface-go-ipfs-core/path"
-	"github.com/ipfs/tar-utils"
 )
 
 var ErrInvalidCompressionLevel = errors.New("compression level must be between 1 and 9")
@@ -44,6 +45,9 @@ To output a TAR archive instead of unpacked files, use '--archive' or '-a'.
 To compress the output with GZIP compression, use '--compress' or '-C'. You
 may also specify the level of compression by specifying '-l=<1-9>'.
 `,
+		HTTP: &cmds.HTTPHelpText{
+			ResponseContentType: "application/x-tar, or application/gzip when compress=true",
+		},
 	},
 
 	Arguments: []cmds.Argument{
@@ -54,12 +58,14 @@ may also specify the level of compression by specifying '-l=<1-9>'.
 		cmds.BoolOption(archiveOptionName, "a", "Output a TAR archive."),
 		cmds.BoolOption(compressOptionName, "C", "Compress the output with GZIP compression."),
 		cmds.IntOption(compressionLevelOptionName, "l", "The level of compression (1-9)."),
+		cmds.BoolOption(progressOptionName, "p", "Stream progress data. Defaults to true when stderr is a terminal."),
 	},
 	PreRun: func(req *cmds.Request, env cmds.Environment) error {
 		_, err := getCompressOptions(req)
 		return err
 	},
 	Run: func(req *cmds.Request, res cmds.ResponseEmitter, env cmds.Environment) error {
+		ctx := req.Context
 		cmplvl, err := getCompressOptions(req)
 		if err != nil {
 			return err
@@ -70,9 +76,12 @@ may also specify the level of compression by specifying '-l=<1-9>'.
 			return err
 		}
 
-		p := path.New(req.Arguments[0])
+		p, err := cmdutils.PathOrCidPath(req.Arguments[0])
+		if err != nil {
+			return err
+		}
 
-		file, err := api.Unixfs().Get(req.Context, p)
+		file, err := api.Unixfs().Get(ctx, p)
 		if err != nil {
 			return err
 		}
@@ -88,6 +97,23 @@ may also specify the level of compression by specifying '-l=<1-9>'.
 		reader, err := fileArchive(file, p.String(), archive, cmplvl)
 		if err != nil {
 			return err
+		}
+		go func() {
+			// We cannot defer a close in the response writer (like we should)
+			// Because the cmd framework outsmart us and doesn't call response
+			// if the context is over.
+			<-ctx.Done()
+			reader.Close()
+		}()
+
+		// Set Content-Type based on output format.
+		// When compression is enabled, output is gzip (or tar.gz for directories).
+		// Otherwise, tar is used as the transport format.
+		res.SetEncodingType(cmds.OctetStream)
+		if cmplvl != gzip.NoCompression {
+			res.SetContentType("application/gzip")
+		} else {
+			res.SetContentType("application/x-tar")
 		}
 
 		return res.Emit(reader)
@@ -114,6 +140,7 @@ may also specify the level of compression by specifying '-l=<1-9>'.
 			}
 
 			archive, _ := req.Options[archiveOptionName].(bool)
+			showProgress := cmdenv.ShouldShowProgress(req, progressOptionName)
 
 			gw := getWriter{
 				Out:         os.Stdout,
@@ -121,6 +148,7 @@ may also specify the level of compression by specifying '-l=<1-9>'.
 				Archive:     archive,
 				Compression: cmplvl,
 				Size:        int64(res.Length()),
+				Progress:    showProgress,
 			}
 
 			return gw.Write(outReader, outPath)
@@ -149,19 +177,7 @@ func progressBarForReader(out io.Writer, r io.Reader, l int64) (*pb.ProgressBar,
 }
 
 func makeProgressBar(out io.Writer, l int64) *pb.ProgressBar {
-	// setup bar reader
-	// TODO: get total length of files
-	bar := pb.New64(l).SetUnits(pb.U_BYTES)
-	bar.Output = out
-
-	// the progress bar lib doesn't give us a way to get the width of the output,
-	// so as a hack we just use a callback to measure the output, then get rid of it
-	bar.Callback = func(line string) {
-		terminalWidth := len(line)
-		bar.Callback = nil
-		log.Infof("terminal width: %v\n", terminalWidth)
-	}
-	return bar
+	return pb.New64(l).Set(pb.Bytes, true).SetTemplateString(cmdenv.ProgressBarFullTemplate).SetWriter(out)
 }
 
 func getOutPath(req *cmds.Request) string {
@@ -181,6 +197,7 @@ type getWriter struct {
 	Archive     bool
 	Compression int
 	Size        int64
+	Progress    bool
 }
 
 func (gw *getWriter) Write(r io.Reader, fpath string) error {
@@ -213,22 +230,29 @@ func (gw *getWriter) writeArchive(r io.Reader, fpath string) error {
 	defer file.Close()
 
 	fmt.Fprintf(gw.Out, "Saving archive to %s\n", fpath)
-	bar, barR := progressBarForReader(gw.Err, r, gw.Size)
-	bar.Start()
-	defer bar.Finish()
+	if gw.Progress {
+		var bar *pb.ProgressBar
+		bar, r = progressBarForReader(gw.Err, r, gw.Size)
+		bar.Start()
+		defer bar.Finish()
+	}
 
-	_, err = io.Copy(file, barR)
+	_, err = io.Copy(file, r)
 	return err
 }
 
 func (gw *getWriter) writeExtracted(r io.Reader, fpath string) error {
 	fmt.Fprintf(gw.Out, "Saving file(s) to %s\n", fpath)
-	bar := makeProgressBar(gw.Err, gw.Size)
-	bar.Start()
-	defer bar.Finish()
-	defer bar.Set64(gw.Size)
+	var progressCb func(int64) int64
+	if gw.Progress {
+		bar := makeProgressBar(gw.Err, gw.Size)
+		bar.Start()
+		defer bar.Finish()
+		defer bar.SetCurrent(gw.Size)
+		progressCb = func(n int64) int64 { bar.Add64(n); return bar.Current() }
+	}
 
-	extractor := &tar.Extractor{Path: fpath, Progress: bar.Add64}
+	extractor := &tar.Extractor{Path: fpath, Progress: progressCb}
 	return extractor.Extract(r)
 }
 
@@ -246,7 +270,7 @@ func getCompressOptions(req *cmds.Request) (int, error) {
 	return cmplvl, nil
 }
 
-// DefaultBufSize is the buffer size for gets. for now, 1MB, which is ~4 blocks.
+// DefaultBufSize is the buffer size for gets. for now, 1MiB, which is ~4 blocks.
 // TODO: does this need to be configurable?
 var DefaultBufSize = 1048576
 
@@ -262,7 +286,7 @@ func (i *identityWriteCloser) Close() error {
 	return nil
 }
 
-func fileArchive(f files.Node, name string, archive bool, compression int) (io.Reader, error) {
+func fileArchive(f files.Node, name string, archive bool, compression int) (io.ReadCloser, error) {
 	cleaned := gopath.Clean(name)
 	_, filename := gopath.Split(cleaned)
 
@@ -309,12 +333,18 @@ func fileArchive(f files.Node, name string, archive bool, compression int) (io.R
 			closeGzwAndPipe() // everything seems to be ok
 		}()
 	} else {
-		// the case for 1. archive, and 2. not archived and not compressed, in which tar is used anyway as a transport format
+		// the case for 1. archive, and 2. not archived and not compressed, in
+		// which tar is used anyway as a transport format
 
 		// construct the tar writer
 		w, err := files.NewTarWriter(maybeGzw)
 		if checkErrAndClosePipe(err) {
 			return nil, err
+		}
+
+		// if not creating an archive set the format to PAX in order to preserve nanoseconds
+		if !archive {
+			w.SetFormat(gotar.FormatPAX)
 		}
 
 		go func() {

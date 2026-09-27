@@ -15,61 +15,6 @@ func collectPaths(prefix string, cmd *cmds.Command, out map[string]struct{}) {
 	}
 }
 
-func TestROCommands(t *testing.T) {
-	list := []string{
-		"/block",
-		"/block/get",
-		"/block/stat",
-		"/cat",
-		"/commands",
-		"/commands/completion",
-		"/commands/completion/bash",
-		"/dag",
-		"/dag/get",
-		"/dag/resolve",
-		"/dag/stat",
-		"/dag/export",
-		"/dns",
-		"/get",
-		"/ls",
-		"/name",
-		"/name/resolve",
-		"/object",
-		"/object/data",
-		"/object/get",
-		"/object/links",
-		"/object/stat",
-		"/refs",
-		"/resolve",
-		"/version",
-	}
-
-	cmdSet := make(map[string]struct{})
-	collectPaths("", RootRO, cmdSet)
-
-	for _, path := range list {
-		if _, ok := cmdSet[path]; !ok {
-			t.Errorf("%q not in result", path)
-		} else {
-			delete(cmdSet, path)
-		}
-	}
-
-	for path := range cmdSet {
-		t.Errorf("%q in result but shouldn't be", path)
-	}
-
-	for _, path := range list {
-		path = path[1:] // remove leading slash
-		split := strings.Split(path, "/")
-		sub, err := RootRO.Get(split)
-		if err != nil {
-			t.Errorf("error getting subcommand %q: %v", path, err)
-		} else if sub == nil {
-			t.Errorf("subcommand %q is nil even though there was no error", path)
-		}
-	}
-}
 func TestCommands(t *testing.T) {
 	list := []string{
 		"/add",
@@ -85,7 +30,6 @@ func TestCommands(t *testing.T) {
 		"/block/stat",
 		"/bootstrap",
 		"/bootstrap/add",
-		"/bootstrap/add/default",
 		"/bootstrap/list",
 		"/bootstrap/rm",
 		"/bootstrap/rm/all",
@@ -96,9 +40,12 @@ func TestCommands(t *testing.T) {
 		"/cid/codecs",
 		"/cid/format",
 		"/cid/hashes",
+		"/cid/inspect",
 		"/commands",
 		"/commands/completion",
 		"/commands/completion/bash",
+		"/commands/completion/fish",
+		"/commands/completion/zsh",
 		"/config",
 		"/config/edit",
 		"/config/profile",
@@ -113,21 +60,30 @@ func TestCommands(t *testing.T) {
 		"/dag/resolve",
 		"/dag/stat",
 		"/dht",
-		"/dht/findpeer",
+		"/dht/query",
 		"/dht/findprovs",
+		"/dht/findpeer",
 		"/dht/get",
 		"/dht/provide",
 		"/dht/put",
-		"/dht/query",
+		"/routing",
+		"/routing/put",
+		"/routing/get",
+		"/routing/findpeer",
+		"/routing/findprovs",
+		"/routing/provide",
+		"/routing/reprovide",
 		"/diag",
 		"/diag/cmds",
 		"/diag/cmds/clear",
 		"/diag/cmds/set-time",
+		"/diag/datastore",
+		"/diag/datastore/count",
+		"/diag/datastore/get",
+		"/diag/datastore/put",
+		"/diag/healthy",
 		"/diag/profile",
 		"/diag/sys",
-		"/dns",
-		"/file",
-		"/file/ls",
 		"/files",
 		"/files/chcid",
 		"/files/cp",
@@ -139,6 +95,9 @@ func TestCommands(t *testing.T) {
 		"/files/rm",
 		"/files/stat",
 		"/files/write",
+		"/files/chmod",
+		"/files/chroot",
+		"/files/touch",
 		"/filestore",
 		"/filestore/dups",
 		"/filestore/ls",
@@ -150,9 +109,12 @@ func TestCommands(t *testing.T) {
 		"/key/gen",
 		"/key/import",
 		"/key/list",
+		"/key/ls",
 		"/key/rename",
 		"/key/rm",
 		"/key/rotate",
+		"/key/sign",
+		"/key/verify",
 		"/log",
 		"/log/level",
 		"/log/ls",
@@ -165,11 +127,14 @@ func TestCommands(t *testing.T) {
 		"/multibase/transcode",
 		"/multibase/list",
 		"/name",
+		"/name/get",
+		"/name/inspect",
 		"/name/publish",
 		"/name/pubsub",
 		"/name/pubsub/cancel",
 		"/name/pubsub/state",
 		"/name/pubsub/subs",
+		"/name/put",
 		"/name/resolve",
 		"/object",
 		"/object/data",
@@ -207,19 +172,25 @@ func TestCommands(t *testing.T) {
 		"/pin/update",
 		"/pin/verify",
 		"/ping",
+		"/provide",
+		"/provide/clear",
+		"/provide/once",
+		"/provide/stat",
 		"/pubsub",
 		"/pubsub/ls",
 		"/pubsub/peers",
 		"/pubsub/pub",
+		"/pubsub/reset",
 		"/pubsub/sub",
 		"/refs",
 		"/refs/local",
 		"/repo",
-		"/repo/fsck",
 		"/repo/gc",
+		"/repo/migrate",
 		"/repo/stat",
 		"/repo/verify",
 		"/repo/version",
+		"/repo/ls",
 		"/resolve",
 		"/shutdown",
 		"/stats",
@@ -227,9 +198,11 @@ func TestCommands(t *testing.T) {
 		"/stats/bw",
 		"/stats/dht",
 		"/stats/provide",
+		"/stats/reprovide",
 		"/stats/repo",
 		"/swarm",
 		"/swarm/addrs",
+		"/swarm/addrs/autonat",
 		"/swarm/addrs/listen",
 		"/swarm/addrs/local",
 		"/swarm/connect",
@@ -242,13 +215,15 @@ func TestCommands(t *testing.T) {
 		"/swarm/peering/add",
 		"/swarm/peering/ls",
 		"/swarm/peering/rm",
-		"/tar",
-		"/tar/add",
-		"/tar/cat",
+		"/swarm/resources",
 		"/update",
-		"/urlstore",
-		"/urlstore/add",
+		"/update/check",
+		"/update/clean",
+		"/update/install",
+		"/update/revert",
+		"/update/versions",
 		"/version",
+		"/version/check",
 		"/version/deps",
 	}
 

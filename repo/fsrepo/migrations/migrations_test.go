@@ -3,21 +3,19 @@ package migrations
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	config "github.com/ipfs/go-ipfs-config"
+	config "github.com/ipfs/kubo/config"
 )
 
 func TestFindMigrations(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	migs, bins, err := findMigrations(ctx, 0, 5)
 	if err != nil {
@@ -34,9 +32,7 @@ func TestFindMigrations(t *testing.T) {
 		createFakeBin(i-1, i, tmpDir)
 	}
 
-	origPath := os.Getenv("PATH")
-	os.Setenv("PATH", tmpDir)
-	defer os.Setenv("PATH", origPath)
+	t.Setenv("PATH", tmpDir)
 
 	migs, bins, err = findMigrations(ctx, 0, 5)
 	if err != nil {
@@ -63,8 +59,7 @@ func TestFindMigrations(t *testing.T) {
 func TestFindMigrationsReverse(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	migs, bins, err := findMigrations(ctx, 5, 0)
 	if err != nil {
@@ -81,9 +76,7 @@ func TestFindMigrationsReverse(t *testing.T) {
 		createFakeBin(i-1, i, tmpDir)
 	}
 
-	origPath := os.Getenv("PATH")
-	os.Setenv("PATH", tmpDir)
-	defer os.Setenv("PATH", origPath)
+	t.Setenv("PATH", tmpDir)
 
 	migs, bins, err = findMigrations(ctx, 5, 0)
 	if err != nil {
@@ -108,12 +101,9 @@ func TestFindMigrationsReverse(t *testing.T) {
 }
 
 func TestFetchMigrations(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
-	ts := createTestServer()
-	defer ts.Close()
-	fetcher := NewHttpFetcher(CurrentIpfsDist, ts.URL, "", 0)
+	fetcher := NewHttpFetcher(testIpfsDist, testServer.URL, "", 0)
 
 	tmpDir := t.TempDir()
 
@@ -147,10 +137,8 @@ func TestFetchMigrations(t *testing.T) {
 }
 
 func TestRunMigrations(t *testing.T) {
-	fakeHome := t.TempDir()
-
-	os.Setenv("HOME", fakeHome)
-	fakeIpfs := filepath.Join(fakeHome, ".ipfs")
+	fakeIpfs := filepath.Join(t.TempDir(), ".ipfs")
+	t.Setenv(config.EnvDir, fakeIpfs)
 
 	err := os.Mkdir(fakeIpfs, os.ModePerm)
 	if err != nil {
@@ -163,18 +151,15 @@ func TestRunMigrations(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ts := createTestServer()
-	defer ts.Close()
-	fetcher := NewHttpFetcher(CurrentIpfsDist, ts.URL, "", 0)
+	fetcher := NewHttpFetcher(testIpfsDist, testServer.URL, "", 0)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	targetVer := 9
 
 	err = RunMigration(ctx, fetcher, targetVer, fakeIpfs, false)
 	if err == nil || !strings.HasPrefix(err.Error(), "downgrade not allowed") {
-		t.Fatal("expected 'downgrade not alloed' error")
+		t.Fatal("expected 'downgrade not allowed' error")
 	}
 
 	err = RunMigration(ctx, fetcher, targetVer, fakeIpfs, true)
@@ -192,7 +177,7 @@ func createFakeBin(from, to int, tmpDir string) {
 		panic(err)
 	}
 	emptyFile.Close()
-	err = os.Chmod(migPath, 0755)
+	err = os.Chmod(migPath, 0o755)
 	if err != nil {
 		panic(err)
 	}
@@ -222,7 +207,7 @@ var testConfig = `
 func TestReadMigrationConfigDefaults(t *testing.T) {
 	tmpDir := makeConfig(t, "{}")
 
-	cfg, err := ReadMigrationConfig(tmpDir)
+	cfg, err := ReadMigrationConfig(tmpDir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +229,7 @@ func TestReadMigrationConfigDefaults(t *testing.T) {
 func TestReadMigrationConfigErrors(t *testing.T) {
 	tmpDir := makeConfig(t, `{"Migration": {"Keep": "badvalue"}}`)
 
-	_, err := ReadMigrationConfig(tmpDir)
+	_, err := ReadMigrationConfig(tmpDir, "")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -253,13 +238,13 @@ func TestReadMigrationConfigErrors(t *testing.T) {
 	}
 
 	os.RemoveAll(tmpDir)
-	_, err = ReadMigrationConfig(tmpDir)
+	_, err = ReadMigrationConfig(tmpDir, "")
 	if err == nil {
 		t.Fatal("expected error")
 	}
 
 	tmpDir = makeConfig(t, `}{`)
-	_, err = ReadMigrationConfig(tmpDir)
+	_, err = ReadMigrationConfig(tmpDir, "")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -268,7 +253,7 @@ func TestReadMigrationConfigErrors(t *testing.T) {
 func TestReadMigrationConfig(t *testing.T) {
 	tmpDir := makeConfig(t, testConfig)
 
-	cfg, err := ReadMigrationConfig(tmpDir)
+	cfg, err := ReadMigrationConfig(tmpDir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +275,9 @@ func TestReadMigrationConfig(t *testing.T) {
 
 type mockIpfsFetcher struct{}
 
-func (m *mockIpfsFetcher) Fetch(ctx context.Context, filePath string) (io.ReadCloser, error) {
+var _ Fetcher = (*mockIpfsFetcher)(nil)
+
+func (m *mockIpfsFetcher) Fetch(ctx context.Context, filePath string) ([]byte, error) {
 	return nil, nil
 }
 
@@ -324,16 +311,13 @@ func TestGetMigrationFetcher(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, ok := f.(*HttpFetcher); !ok {
-		t.Fatal("expected HttpFetcher")
+		t.Fatalf("expected HttpFetcher, got %T", f)
 	}
 
 	downloadSources = []string{"ipfs"}
-	f, err = GetMigrationFetcher(downloadSources, "", newIpfsFetcher)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := f.(*mockIpfsFetcher); !ok {
-		t.Fatal("expected IpfsFetcher")
+	_, err = GetMigrationFetcher(downloadSources, "", newIpfsFetcher)
+	if err == nil || !strings.Contains(err.Error(), "IPFS downloads are not supported for legacy migrations") {
+		t.Fatal("Expected IPFS downloads error, got:", err)
 	}
 
 	downloadSources = []string{"http"}
@@ -341,24 +325,21 @@ func TestGetMigrationFetcher(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := f.(*HttpFetcher); !ok {
-		t.Fatal("expected HttpFetcher")
+	mf, ok := f.(*MultiFetcher)
+	if !ok {
+		t.Fatal("expected MultiFetcher for HTTPS alias expansion")
+	}
+	if mf.Len() != len(defaultMigrationGateways) {
+		t.Fatalf("expected %d fetchers from HTTPS alias, got %d", len(defaultMigrationGateways), mf.Len())
 	}
 
 	downloadSources = []string{"IPFS", "HTTPS"}
-	f, err = GetMigrationFetcher(downloadSources, "", newIpfsFetcher)
-	if err != nil {
-		t.Fatal(err)
-	}
-	mf, ok := f.(*MultiFetcher)
-	if !ok {
-		t.Fatal("expected MultiFetcher")
-	}
-	if mf.Len() != 2 {
-		t.Fatal("expected 2 fetchers in MultiFetcher")
+	_, err = GetMigrationFetcher(downloadSources, "", newIpfsFetcher)
+	if err == nil || !strings.Contains(err.Error(), "IPFS downloads are not supported for legacy migrations") {
+		t.Fatal("Expected IPFS downloads error, got:", err)
 	}
 
-	downloadSources = []string{"ipfs", "https", "some.domain.io"}
+	downloadSources = []string{"https", "some.domain.io"}
 	f, err = GetMigrationFetcher(downloadSources, "", newIpfsFetcher)
 	if err != nil {
 		t.Fatal(err)
@@ -367,8 +348,8 @@ func TestGetMigrationFetcher(t *testing.T) {
 	if !ok {
 		t.Fatal("expected MultiFetcher")
 	}
-	if mf.Len() != 3 {
-		t.Fatal("expected 3 fetchers in MultiFetcher")
+	if mf.Len() != len(defaultMigrationGateways)+1 {
+		t.Fatalf("expected %d fetchers in MultiFetcher, got %d", len(defaultMigrationGateways)+1, mf.Len())
 	}
 
 	downloadSources = nil

@@ -1,25 +1,30 @@
 package dagcmd
 
 import (
+	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"io"
+	"path"
 
-	"github.com/ipfs/go-ipfs/core/commands/cmdenv"
+	"github.com/dustin/go-humanize"
+	"github.com/ipfs/kubo/core/commands/cmdenv"
+	"github.com/ipfs/kubo/core/commands/cmdutils"
 
 	cid "github.com/ipfs/go-cid"
 	cidenc "github.com/ipfs/go-cidutil/cidenc"
 	cmds "github.com/ipfs/go-ipfs-cmds"
-	ipfspath "github.com/ipfs/go-path"
-	//gipfree "github.com/ipld/go-ipld-prime/impl/free"
-	//gipselector "github.com/ipld/go-ipld-prime/traversal/selector"
-	//gipselectorbuilder "github.com/ipld/go-ipld-prime/traversal/selector/builder"
 )
 
 const (
-	pinRootsOptionName = "pin-roots"
-	progressOptionName = "progress"
-	silentOptionName   = "silent"
-	statsOptionName    = "stats"
+	pinRootsOptionName        = "pin-roots"
+	progressOptionName        = "progress"
+	silentOptionName          = "silent"
+	statsOptionName           = "stats"
+	fastProvideRootOptionName = "fast-provide-root"
+	fastProvideDAGOptionName  = "fast-provide-dag"
+	fastProvideWaitOptionName = "fast-provide-wait"
+	localOnlyOptionName       = "local-only"
 )
 
 // DagCmd provides a subset of commands for interacting with ipld dag objects
@@ -29,9 +34,9 @@ var DagCmd = &cmds.Command{
 		ShortDescription: `
 'ipfs dag' is used for creating and manipulating DAG objects/hierarchies.
 
-This subcommand is currently an experimental feature, but it is intended
-to deprecate and replace the existing 'ipfs object' command moving forward.
-		`,
+This subcommand is intended to deprecate and replace
+the existing 'ipfs object' command moving forward.
+`,
 	},
 	Subcommands: map[string]*cmds.Command{
 		"put":     DagPutCmd,
@@ -87,13 +92,14 @@ into an object of the specified format.
 		cmds.StringOption("store-codec", "Codec that the stored object will be encoded with").WithDefault("dag-cbor"),
 		cmds.StringOption("input-codec", "Codec that the input object is encoded in").WithDefault("dag-json"),
 		cmds.BoolOption("pin", "Pin this object when adding."),
-		cmds.StringOption("hash", "Hash function to use").WithDefault("sha2-256"),
+		cmds.StringOption("hash", "Hash function to use"),
+		cmdutils.AllowBigBlockOption,
 	},
 	Run:  dagPut,
 	Type: OutputObject{},
 	Encoders: cmds.EncoderMap{
 		cmds.Text: cmds.MakeTypedEncoder(func(req *cmds.Request, w io.Writer, out *OutputObject) error {
-			enc, err := cmdenv.GetLowLevelCidEncoder(req)
+			enc, err := cmdenv.GetCidEncoder(req)
 			if err != nil {
 				return err
 			}
@@ -149,14 +155,14 @@ var DagResolveCmd = &cmds.Command{
 				// Nope, fallback on the default.
 				fallthrough
 			default:
-				enc, err = cmdenv.GetLowLevelCidEncoder(req)
+				enc, err = cmdenv.GetCidEncoder(req)
 				if err != nil {
 					return err
 				}
 			}
 			p := enc.Encode(out.Cid)
 			if out.RemPath != "" {
-				p = ipfspath.Join([]string{p, out.RemPath})
+				p = path.Join(p, out.RemPath)
 			}
 
 			fmt.Fprint(w, p)
@@ -164,13 +170,6 @@ var DagResolveCmd = &cmds.Command{
 		}),
 	},
 	Type: ResolveOutput{},
-}
-
-type importResult struct {
-	blockCount      uint64
-	blockBytesCount uint64
-	roots           map[cid.Cid]struct{}
-	err             error
 }
 
 // DagImportCmd is a command for importing a car to ipfs
@@ -195,22 +194,43 @@ Note:
   currently present in the blockstore does not represent a complete DAG,
   pinning of that individual root will fail.
 
-Maximum supported CAR version: 1
+  Use --local-only to import a partial CAR (e.g. from 'dag export
+  --local-only'). --local-only implies --pin-roots=false because a partial
+  CAR has no full DAG to pin.
+
+FAST PROVIDE OPTIMIZATION:
+
+Root CIDs from CAR headers are immediately provided to the DHT in addition
+to the regular provide queue, allowing other peers to discover your content
+right away. This complements the sweep provider, which efficiently provides
+all blocks according to Provide.Strategy over time.
+
+By default, the provide happens in the background without blocking the
+command. Use --fast-provide-wait to wait for the provide to complete, or
+--fast-provide-root=false to skip it. Works even with --pin-roots=false.
+Automatically skipped when DHT is not available.
+
+Maximum supported CAR version: 2
+Specification of CAR formats: https://ipld.io/specs/transport/car/
 `,
 	},
 	Arguments: []cmds.Argument{
 		cmds.FileArg("path", true, true, "The path of a .car file.").EnableStdin(),
 	},
 	Options: []cmds.Option{
-		cmds.BoolOption(pinRootsOptionName, "Pin optional roots listed in the .car headers after importing.").WithDefault(true),
+		cmds.BoolOption(pinRootsOptionName, "Pin optional roots listed in the .car headers after importing. Default: true."),
+		cmds.BoolOption(localOnlyOptionName, "Import a partial CAR (e.g. from 'dag export --local-only'). Implies --pin-roots=false."),
 		cmds.BoolOption(silentOptionName, "No output."),
 		cmds.BoolOption(statsOptionName, "Output stats."),
+		cmds.BoolOption(fastProvideRootOptionName, "Immediately provide root CIDs to DHT in addition to regular queue, for faster discovery. Default: Import.FastProvideRoot"),
+		cmds.BoolOption(fastProvideDAGOptionName, "Walk and provide the full DAG according to Provide.Strategy after import. Default: Import.FastProvideDAG"),
+		cmds.BoolOption(fastProvideWaitOptionName, "Block until the immediate provide completes before returning. Default: Import.FastProvideWait"),
+		cmdutils.AllowBigBlockOption,
 	},
 	Type: CarImportOutput{},
 	Run:  dagImport,
 	Encoders: cmds.EncoderMap{
 		cmds.Text: cmds.MakeTypedEncoder(func(req *cmds.Request, w io.Writer, event *CarImportOutput) error {
-
 			silent, _ := req.Options[silentOptionName].(bool)
 			if silent {
 				return nil
@@ -219,7 +239,7 @@ Maximum supported CAR version: 1
 			// event should have only one of `Root` or `Stats` set, not both
 			if event.Root == nil {
 				if event.Stats == nil {
-					return fmt.Errorf("Unexpected message from DAG import")
+					return fmt.Errorf("unexpected message from DAG import")
 				}
 				stats, _ := req.Options[statsOptionName].(bool)
 				if stats {
@@ -229,19 +249,19 @@ Maximum supported CAR version: 1
 			}
 
 			if event.Stats != nil {
-				return fmt.Errorf("Unexpected message from DAG import")
+				return fmt.Errorf("unexpected message from DAG import")
 			}
 
-			enc, err := cmdenv.GetLowLevelCidEncoder(req)
+			enc, err := cmdenv.GetCidEncoder(req)
 			if err != nil {
 				return err
 			}
 
 			if event.Root.PinErrorMsg != "" {
-				event.Root.PinErrorMsg = fmt.Sprintf("FAILED: %s", event.Root.PinErrorMsg)
-			} else {
-				event.Root.PinErrorMsg = "success"
+				return fmt.Errorf("pinning root %q FAILED: %s", enc.Encode(event.Root.Cid), event.Root.PinErrorMsg)
 			}
+
+			event.Root.PinErrorMsg = "success"
 
 			_, err = fmt.Fprintf(
 				w,
@@ -262,13 +282,22 @@ var DagExportCmd = &cmds.Command{
 'ipfs dag export' fetches a DAG and streams it out as a well-formed .car file.
 Note that at present only single root selections / .car files are supported.
 The output of blocks happens in strict DAG-traversal, first-seen, order.
+CAR file follows the CARv1 format: https://ipld.io/specs/transport/car/carv1/
+
+Use --local-only for a best-effort export from the local blockstore: blocks
+that are missing or unreadable locally (and their subtrees) are skipped, so
+the resulting CAR is partial. --local-only implies --offline.
 `,
+		HTTP: &cmds.HTTPHelpText{
+			ResponseContentType: "application/vnd.ipld.car",
+		},
 	},
 	Arguments: []cmds.Argument{
 		cmds.StringArg("root", true, false, "CID of a root to recursively export").EnableStdin(),
 	},
 	Options: []cmds.Option{
-		cmds.BoolOption(progressOptionName, "p", "Display progress on CLI. Defaults to true when STDERR is a TTY."),
+		cmds.BoolOption(progressOptionName, "p", "Stream progress data. Defaults to true when stderr is a terminal."),
+		cmds.BoolOption(localOnlyOptionName, "Best-effort export of locally-available blocks; missing or unreadable blocks (and their subtrees) are skipped. Implies --offline."),
 	},
 	Run: dagExport,
 	PostRun: cmds.PostRunMap{
@@ -276,14 +305,47 @@ The output of blocks happens in strict DAG-traversal, first-seen, order.
 	},
 }
 
-// DagStat is a dag stat command response
+// DagStat is a dag stat command response. Cid is stored as a
+// pre-encoded string (via GetCidEncoder in the Run handler) so that
+// --cid-base is respected and no custom MarshalJSON is needed.
 type DagStat struct {
-	Size      uint64
-	NumBlocks int64
+	Cid       string `json:"Cid"`
+	Size      uint64 `json:",omitempty"`
+	NumBlocks int64  `json:",omitempty"`
 }
 
-func (s *DagStat) String() string {
-	return fmt.Sprintf("Size: %d, NumBlocks: %d", s.Size, s.NumBlocks)
+type DagStatSummary struct {
+	redundantSize uint64     `json:"-"`
+	UniqueBlocks  int        `json:",omitempty"`
+	TotalSize     uint64     `json:",omitempty"`
+	SharedSize    uint64     `json:",omitempty"`
+	Ratio         float32    `json:",omitempty"`
+	DagStatsArray []*DagStat `json:"DagStats,omitempty"`
+}
+
+func (s *DagStatSummary) String() string {
+	return fmt.Sprintf("Total Size: %d (%s)\nUnique Blocks: %d\nShared Size: %d (%s)\nRatio: %f",
+		s.TotalSize, humanize.Bytes(s.TotalSize),
+		s.UniqueBlocks,
+		s.SharedSize, humanize.Bytes(s.SharedSize),
+		s.Ratio)
+}
+
+func (s *DagStatSummary) incrementTotalSize(size uint64) {
+	s.TotalSize += size
+}
+
+func (s *DagStatSummary) incrementRedundantSize(size uint64) {
+	s.redundantSize += size
+}
+
+func (s *DagStatSummary) appendStats(stats *DagStat) {
+	s.DagStatsArray = append(s.DagStatsArray, stats)
+}
+
+func (s *DagStatSummary) calculateSummary() {
+	s.Ratio = float32(s.redundantSize) / float32(s.TotalSize)
+	s.SharedSize = s.redundantSize - s.TotalSize
 }
 
 // DagStatCmd is a command for getting size information about an ipfs-stored dag
@@ -298,24 +360,49 @@ Note: This command skips duplicate blocks in reporting both size and the number 
 `,
 	},
 	Arguments: []cmds.Argument{
-		cmds.StringArg("root", true, false, "CID of a DAG root to get statistics for").EnableStdin(),
+		cmds.StringArg("root", true, true, "CID of a DAG root to get statistics for").EnableStdin(),
 	},
 	Options: []cmds.Option{
-		cmds.BoolOption(progressOptionName, "p", "Return progressive data while reading through the DAG").WithDefault(true),
+		cmds.BoolOption(progressOptionName, "p", "Stream progress data. Defaults to true when stderr is a terminal."),
 	},
 	Run:  dagStat,
-	Type: DagStat{},
+	Type: DagStatSummary{},
 	PostRun: cmds.PostRunMap{
 		cmds.CLI: finishCLIStat,
 	},
 	Encoders: cmds.EncoderMap{
-		cmds.Text: cmds.MakeTypedEncoder(func(req *cmds.Request, w io.Writer, event *DagStat) error {
+		cmds.Text: cmds.MakeTypedEncoder(func(req *cmds.Request, w io.Writer, event *DagStatSummary) error {
+			fmt.Fprintln(w)
+			csvWriter := csv.NewWriter(w)
+			csvWriter.Comma = '\t'
+			cidSpacing := len(event.DagStatsArray[0].Cid)
+			header := []string{fmt.Sprintf("%-*s", cidSpacing, "CID"), fmt.Sprintf("%-15s", "Blocks"), "Size"}
+			if err := csvWriter.Write(header); err != nil {
+				return err
+			}
+			for _, dagStat := range event.DagStatsArray {
+				numBlocksStr := fmt.Sprint(dagStat.NumBlocks)
+				err := csvWriter.Write([]string{
+					dagStat.Cid,
+					fmt.Sprintf("%-15s", numBlocksStr),
+					fmt.Sprint(dagStat.Size),
+				})
+				if err != nil {
+					return err
+				}
+			}
+			csvWriter.Flush()
+			fmt.Fprint(w, "\nSummary\n")
 			_, err := fmt.Fprintf(
 				w,
 				"%v\n",
 				event,
 			)
+			fmt.Fprint(w, "\n\n")
 			return err
+		}),
+		cmds.JSON: cmds.MakeTypedEncoder(func(req *cmds.Request, w io.Writer, event *DagStatSummary) error {
+			return json.NewEncoder(w).Encode(event)
 		}),
 	},
 }

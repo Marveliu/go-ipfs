@@ -4,6 +4,11 @@ test_description="Test cid commands"
 
 . lib/test-lib.sh
 
+# NOTE: Primary tests for "ipfs cid" commands are in test/cli/cid_test.go
+# These sharness tests are kept for backward compatibility but new tests
+# should be added to test/cli/cid_test.go instead. If any of these tests
+# break, consider removing them and updating only the test/cli version.
+
 # note: all "ipfs cid" commands should work without requiring a repo
 
 CIDv0="QmS4ustL54uo8FzR9455qaxZwuMiUhyvMcX9Ba8nUH4uVv"
@@ -13,6 +18,7 @@ CIDb32="bafybeibxm2nsadl3fnxv2sxcxmxaco2jl53wpeorjdzidjwf5aqdg7wa6u"
 CIDbase="QmYNmQKp6SuaVrpgWRsPTgCQCnpxUYGq76YEKBXuj2N4H6"
 CIDb32pb="bafybeievd6mwe6vcwnkwo3eizs3h7w3a34opszbyfxziqdxguhjw7imdve"
 CIDb32raw="bafkreievd6mwe6vcwnkwo3eizs3h7w3a34opszbyfxziqdxguhjw7imdve"
+CIDb32dagcbor="bafyreievd6mwe6vcwnkwo3eizs3h7w3a34opszbyfxziqdxguhjw7imdve"
 
 test_expect_success "cid base32 works" '
   echo $CIDb32 > expected &&
@@ -80,34 +86,44 @@ test_expect_success "cid format -v 1 -b base58btc works from stdin" '
 '
 
 cat <<EOF > bases_expect
-      0  identity
-0    48  base2
-b    98  base32
-B    66  base32upper
-c    99  base32pad
-C    67  base32padupper
-f   102  base16
-F    70  base16upper
-k   107  base36
-K    75  base36upper
-m   109  base64
-M    77  base64pad
-t   116  base32hexpad
-T    84  base32hexpadupper
-u   117  base64url
-U    85  base64urlpad
-v   118  base32hex
-V    86  base32hexupper
-z   122  base58btc
-Z    90  base58flickr
+        0  identity
+0      48  base2
+b      98  base32
+B      66  base32upper
+c      99  base32pad
+C      67  base32padupper
+f     102  base16
+F      70  base16upper
+k     107  base36
+K      75  base36upper
+m     109  base64
+M      77  base64pad
+t     116  base32hexpad
+T      84  base32hexpadupper
+u     117  base64url
+U      85  base64urlpad
+v     118  base32hex
+V      86  base32hexupper
+z     122  base58btc
+Z      90  base58flickr
+🚀  128640  base256emoji
 EOF
 
 cat <<EOF > codecs_expect
+   81  cbor
    85  raw
-  112  protobuf
-  113  cbor
+  112  dag-pb
+  113  dag-cbor
+  114  libp2p-key
   120  git-raw
+  123  torrent-info
+  124  torrent-file
+  128  blake3-hashseq
+  129  leofcoin-block
+  130  leofcoin-tx
+  131  leofcoin-pr
   133  dag-jose
+  134  dag-cose
   144  eth-block
   145  eth-block-list
   146  eth-tx-trie
@@ -117,16 +133,39 @@ cat <<EOF > codecs_expect
   150  eth-state-trie
   151  eth-account-snapshot
   152  eth-storage-trie
+  153  eth-receipt-log-trie
+  154  eth-receipt-log
   176  bitcoin-block
   177  bitcoin-tx
+  178  bitcoin-witness-commitment
   192  zcash-block
   193  zcash-tx
+  208  stellar-block
+  209  stellar-tx
   224  decred-block
   225  decred-tx
   240  dash-block
   241  dash-tx
-61697  fil-commitment-unsealed
-61698  fil-commitment-sealed
+  250  swarm-manifest
+  251  swarm-feed
+  252  beeson
+  297  dag-json
+  496  swhid-1-snp
+  512  json
+46083  rdfc-1
+46593  json-jcs
+EOF
+
+cat <<EOF > supported_codecs_expect
+   81  cbor
+   85  raw
+  112  dag-pb
+  113  dag-cbor
+  114  libp2p-key
+  120  git-raw
+  133  dag-jose
+  297  dag-json
+  512  json
 EOF
 
 cat <<EOF > hashes_expect
@@ -143,6 +182,7 @@ cat <<EOF > hashes_expect
    27  keccak-256
    28  keccak-384
    29  keccak-512
+   30  blake3
    86  dbl-sha2-256
 45588  blake2b-160
 45589  blake2b-168
@@ -205,13 +245,57 @@ cat <<EOF > hashes_expect
 EOF
 
 test_expect_success "cid bases" '
-  cut -c 10- bases_expect > expect &&
+  cat <<-EOF > expect
+	identity
+	base2
+	base32
+	base32upper
+	base32pad
+	base32padupper
+	base16
+	base16upper
+	base36
+	base36upper
+	base64
+	base64pad
+	base32hexpad
+	base32hexpadupper
+	base64url
+	base64urlpad
+	base32hex
+	base32hexupper
+	base58btc
+	base58flickr
+	base256emoji
+	EOF
   ipfs cid bases > actual &&
   test_cmp expect actual
 '
 
 test_expect_success "cid bases --prefix" '
-  cut -c 1-3,10- bases_expect > expect &&
+  cat <<-EOF > expect
+	   identity
+	0  base2
+	b  base32
+	B  base32upper
+	c  base32pad
+	C  base32padupper
+	f  base16
+	F  base16upper
+	k  base36
+	K  base36upper
+	m  base64
+	M  base64pad
+	t  base32hexpad
+	T  base32hexpadupper
+	u  base64url
+	U  base64urlpad
+	v  base32hex
+	V  base32hexupper
+	z  base58btc
+	Z  base58flickr
+	🚀  base256emoji
+	EOF
   ipfs cid bases --prefix > actual &&
   test_cmp expect actual
 '
@@ -232,6 +316,17 @@ test_expect_success "cid codecs --numeric" '
   test_cmp codecs_expect actual
 '
 
+test_expect_success "cid codecs --supported" '
+  cut -c 8- supported_codecs_expect > expect &&
+  ipfs cid codecs --supported > actual
+  test_cmp expect actual
+'
+
+test_expect_success "cid codecs --supported --numeric" '
+  ipfs cid codecs --supported --numeric > actual &&
+  test_cmp supported_codecs_expect actual
+'
+
 test_expect_success "cid hashes" '
   cut -c 8- hashes_expect > expect &&
   ipfs cid hashes > actual
@@ -245,13 +340,40 @@ test_expect_success "cid hashes --numeric" '
 
 test_expect_success "cid format -c raw" '
   echo $CIDb32raw > expected &&
-  ipfs cid format --codec raw -b base32 $CIDb32pb > actual &&
+  ipfs cid format --mc raw -b base32 $CIDb32pb > actual &&
   test_cmp actual expected
 '
 
-test_expect_success "cid format -c protobuf -v 0" '
+test_expect_success "cid format --mc dag-pb -v 0" '
   echo $CIDbase > expected &&
-  ipfs cid format --codec protobuf -v 0 $CIDb32raw > actual &&
+  ipfs cid format --mc dag-pb -v 0 $CIDb32raw > actual &&
+  test_cmp actual expected
+'
+
+test_expect_success "cid format --mc dag-cbor" '
+  echo $CIDb32dagcbor > expected &&
+  ipfs cid format --mc dag-cbor $CIDb32pb > actual &&
+  test_cmp actual expected
+'
+
+# this was an old flag that we removed, explicitly to force an error
+# so the user would read about the new multicodec names introduced
+# by https://github.com/ipfs/go-cid/commit/b2064d74a8b098193b316689a715cdf4e4934805
+test_expect_success "cid format --codec fails" '
+  echo "Error: unknown option \"codec\"" > expected &&
+  test_expect_code 1 ipfs cid format --codec protobuf 2> actual &&
+  test_cmp actual expected
+'
+
+test_expect_success "cid format -b base256emoji <base32>" '
+  echo "🚀🪐⭐💻😅❓💎🌈🌸🌚💰💍🌒😵🐶💁🤐🌎👼🙃🙅☺🌚😞🤤⭐🚀😃✈🌕😚🍻💜🐷⚽✌😊" > expected &&
+  ipfs cid format -b base256emoji bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi > actual &&
+  test_cmp actual expected
+'
+
+test_expect_success "cid format -b base32 <base256emoji>" '
+  echo "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi" > expected &&
+  ipfs cid format -b base32 🚀🪐⭐💻😅❓💎🌈🌸🌚💰💍🌒😵🐶💁🤐🌎👼🙃🙅☺🌚😞🤤⭐🚀😃✈🌕😚🍻💜🐷⚽✌😊 > actual &&
   test_cmp actual expected
 '
 

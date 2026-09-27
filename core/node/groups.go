@@ -4,30 +4,29 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
+	"strings"
 	"time"
 
-	blockstore "github.com/ipfs/go-ipfs-blockstore"
-	config "github.com/ipfs/go-ipfs-config"
-	util "github.com/ipfs/go-ipfs-util"
-	"github.com/ipfs/go-log"
-	"github.com/libp2p/go-libp2p-core/peer"
+	blockstore "github.com/ipfs/boxo/blockstore"
+	offline "github.com/ipfs/boxo/exchange/offline"
+	merkledag "github.com/ipfs/boxo/ipld/merkledag"
+	uio "github.com/ipfs/boxo/ipld/unixfs/io"
+	util "github.com/ipfs/boxo/util"
+	"github.com/ipfs/go-log/v2"
+	"github.com/ipfs/kubo/config"
+	"github.com/ipfs/kubo/core/node/libp2p"
+	"github.com/ipfs/kubo/p2p"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
-
-	"github.com/ipfs/go-ipfs/core/node/libp2p"
-	"github.com/ipfs/go-ipfs/p2p"
-
-	offline "github.com/ipfs/go-ipfs-exchange-offline"
-	offroute "github.com/ipfs/go-ipfs-routing/offline"
-	uio "github.com/ipfs/go-unixfs/io"
-
-	"github.com/dustin/go-humanize"
+	"github.com/libp2p/go-libp2p-pubsub/timecache"
+	"github.com/libp2p/go-libp2p/core/peer"
+	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
 	"go.uber.org/fx"
 )
 
 var logger = log.Logger("core:constructor")
 
 var BaseLibP2P = fx.Options(
-	fx.Provide(libp2p.UserAgent),
 	fx.Provide(libp2p.PNet),
 	fx.Provide(libp2p.ConnectionManager),
 	fx.Provide(libp2p.Host),
@@ -38,34 +37,23 @@ var BaseLibP2P = fx.Options(
 	fx.Invoke(libp2p.PNetChecker),
 )
 
-func LibP2P(bcfg *BuildCfg, cfg *config.Config) fx.Option {
-	// parse ConnMgr config
+func LibP2P(bcfg *BuildCfg, cfg *config.Config, userResourceOverrides rcmgr.PartialLimitConfig) fx.Option {
+	var connmgr fx.Option
 
-	grace := config.DefaultConnMgrGracePeriod
-	low := config.DefaultConnMgrLowWater
-	high := config.DefaultConnMgrHighWater
+	// set connmgr based on Swarm.ConnMgr.Type
+	connMgrType := cfg.Swarm.ConnMgr.Type.WithDefault(config.DefaultConnMgrType)
+	switch connMgrType {
+	case "none":
+		connmgr = fx.Options() // noop
+	case "", "basic":
+		grace := cfg.Swarm.ConnMgr.GracePeriod.WithDefault(config.DefaultConnMgrGracePeriod)
+		low := int(cfg.Swarm.ConnMgr.LowWater.WithDefault(config.DefaultConnMgrLowWater))
+		high := int(cfg.Swarm.ConnMgr.HighWater.WithDefault(config.DefaultConnMgrHighWater))
+		silence := cfg.Swarm.ConnMgr.SilencePeriod.WithDefault(config.DefaultConnMgrSilencePeriod)
+		connmgr = fx.Provide(libp2p.ConnectionManager(low, high, grace, silence))
 
-	connmgr := fx.Options()
-
-	if cfg.Swarm.ConnMgr.Type != "none" {
-		switch cfg.Swarm.ConnMgr.Type {
-		case "":
-			// 'default' value is the basic connection manager
-			break
-		case "basic":
-			var err error
-			grace, err = time.ParseDuration(cfg.Swarm.ConnMgr.GracePeriod)
-			if err != nil {
-				return fx.Error(fmt.Errorf("parsing Swarm.ConnMgr.GracePeriod: %s", err))
-			}
-
-			low = cfg.Swarm.ConnMgr.LowWater
-			high = cfg.Swarm.ConnMgr.HighWater
-		default:
-			return fx.Error(fmt.Errorf("unrecognized ConnMgr.Type: %q", cfg.Swarm.ConnMgr.Type))
-		}
-
-		connmgr = fx.Provide(libp2p.ConnectionManager(low, high, grace))
+	default:
+		return fx.Error(fmt.Errorf("unrecognized Swarm.ConnMgr.Type: %q", connMgrType))
 	}
 
 	// parse PubSub config
@@ -78,7 +66,20 @@ func LibP2P(bcfg *BuildCfg, cfg *config.Config) fx.Option {
 		pubsubOptions = append(
 			pubsubOptions,
 			pubsub.WithMessageSigning(!cfg.Pubsub.DisableSigning),
+			pubsub.WithSeenMessagesTTL(cfg.Pubsub.SeenMessagesTTL.WithDefault(pubsub.TimeCacheDuration)),
 		)
+
+		var seenMessagesStrategy timecache.Strategy
+		configSeenMessagesStrategy := cfg.Pubsub.SeenMessagesStrategy.WithDefault(config.DefaultSeenMessagesStrategy)
+		switch configSeenMessagesStrategy {
+		case config.LastSeenMessagesStrategy:
+			seenMessagesStrategy = timecache.Strategy_LastSeen
+		case config.FirstSeenMessagesStrategy:
+			seenMessagesStrategy = timecache.Strategy_FirstSeen
+		default:
+			return fx.Error(fmt.Errorf("unsupported Pubsub.SeenMessagesStrategy %q", configSeenMessagesStrategy))
+		}
+		pubsubOptions = append(pubsubOptions, pubsub.WithSeenMessagesStrategy(seenMessagesStrategy))
 
 		switch cfg.Pubsub.Router {
 		case "":
@@ -108,63 +109,124 @@ func LibP2P(bcfg *BuildCfg, cfg *config.Config) fx.Option {
 		// to dhtclient.
 		fallthrough
 	case config.AutoNATServiceEnabled:
-		autonat = fx.Provide(libp2p.AutoNATService(cfg.AutoNAT.Throttle))
+		autonat = fx.Provide(libp2p.AutoNATService(cfg.AutoNAT.Throttle, false))
+	case config.AutoNATServiceEnabledV1Only:
+		autonat = fx.Provide(libp2p.AutoNATService(cfg.AutoNAT.Throttle, true))
 	}
 
-	// If `cfg.Swarm.DisableRelay` is set and `Network.RelayTransport` isn't, use the former.
-	enableRelayTransport := cfg.Swarm.Transports.Network.Relay.WithDefault(!cfg.Swarm.DisableRelay) //nolint
+	enableTCPTransport := cfg.Swarm.Transports.Network.TCP.WithDefault(true)
+	enableWebsocketTransport := cfg.Swarm.Transports.Network.Websocket.WithDefault(true)
+	enableRelayTransport := cfg.Swarm.Transports.Network.Relay.WithDefault(true) // nolint
+	enableRelayService := cfg.Swarm.RelayService.Enabled.WithDefault(enableRelayTransport)
+	enableRelayClient := cfg.Swarm.RelayClient.Enabled.WithDefault(enableRelayTransport)
+	enableAutoTLS := cfg.AutoTLS.Enabled.WithDefault(config.DefaultAutoTLSEnabled)
+	enableAutoWSS := cfg.AutoTLS.AutoWSS.WithDefault(config.DefaultAutoWSS)
+	atlsLog := log.Logger("autotls")
 
-	// Warn about a deprecated option.
-	//nolint
-	if cfg.Swarm.DisableRelay {
-		logger.Error("The 'Swarm.DisableRelay' config field is deprecated.")
-		if enableRelayTransport {
-			logger.Error("'Swarm.DisableRelay' has been overridden by 'Swarm.Transports.Network.Relay'")
-		} else {
-			logger.Error("Use the 'Swarm.Transports.Network.Relay' config field instead")
+	// Log error when relay subsystem could not be initialized due to missing dependency
+	if !enableRelayTransport {
+		if enableRelayService {
+			logger.Fatal("Failed to enable `Swarm.RelayService`, it requires `Swarm.Transports.Network.Relay` to be true.")
+		}
+		if enableRelayClient {
+			logger.Fatal("Failed to enable `Swarm.RelayClient`, it requires `Swarm.Transports.Network.Relay` to be true.")
 		}
 	}
-	//nolint
-	if cfg.Swarm.EnableAutoRelay {
-		logger.Error("The 'Swarm.EnableAutoRelay' config field is deprecated.")
-		if cfg.Swarm.RelayClient.Enabled == config.Default {
-			logger.Error("Use the 'Swarm.AutoRelay.Enabled' config field instead")
-		} else {
-			logger.Error("'Swarm.EnableAutoRelay' has been overridden by 'Swarm.AutoRelay.Enabled'")
+
+	switch {
+	case enableAutoTLS && enableTCPTransport && enableWebsocketTransport:
+		// AutoTLS for Secure WebSockets: ensure WSS listeners are in place (manual or automatic)
+		wssWildcard := fmt.Sprintf("/tls/sni/*.%s/ws", cfg.AutoTLS.DomainSuffix.WithDefault(config.DefaultDomainSuffix))
+		wssWildcardPresent := false
+		customWsPresent := false
+		customWsRegex := regexp.MustCompile(`/wss?$`)
+		tcpRegex := regexp.MustCompile(`/tcp/\d+$`)
+
+		// inspect listeners defined in config at Addresses.Swarm
+		var tcpListeners []string
+		for _, listener := range cfg.Addresses.Swarm {
+			// detect if user manually added /tls/sni/.../ws listener matching AutoTLS.DomainSuffix
+			if strings.Contains(listener, wssWildcard) {
+				atlsLog.Infof("found compatible wildcard listener in Addresses.Swarm. AutoTLS will be used on %s", listener)
+				wssWildcardPresent = true
+				break
+			}
+			// detect if user manually added own /ws or /wss listener that is
+			// not related to AutoTLS feature
+			if customWsRegex.MatchString(listener) {
+				atlsLog.Infof("found custom /ws listener set by user in Addresses.Swarm. AutoTLS will not be used on %s.", listener)
+				customWsPresent = true
+				break
+			}
+			// else, remember /tcp listeners that can be reused for /tls/sni/../ws
+			if tcpRegex.MatchString(listener) {
+				tcpListeners = append(tcpListeners, listener)
+			}
 		}
-	}
-	//nolint
-	if cfg.Swarm.EnableRelayHop {
-		logger.Fatal("The `Swarm.EnableRelayHop` config field is ignored.\n" +
-			"Use `Swarm.RelayService` to configure the circuit v2 relay.\n" +
-			"If you want to continue running a circuit v1 relay, please use the standalone relay daemon: https://github.com/libp2p/go-libp2p-relay-daemon (with RelayV1.Enabled: true)")
+
+		// Append AutoTLS's wildcard listener
+		// if no manual /ws listener was set by the user
+		if enableAutoWSS && !wssWildcardPresent && !customWsPresent {
+			if len(tcpListeners) == 0 {
+				logger.Error("Invalid configuration, AutoTLS will be disabled: AutoTLS.AutoWSS=true requires at least one /tcp listener present in Addresses.Swarm, see https://github.com/ipfs/kubo/blob/master/docs/config.md#autotls")
+				enableAutoTLS = false
+			}
+			for _, tcpListener := range tcpListeners {
+				wssListener := tcpListener + wssWildcard
+				cfg.Addresses.Swarm = append(cfg.Addresses.Swarm, wssListener)
+				atlsLog.Infof("appended AutoWSS listener: %s", wssListener)
+			}
+		}
+
+		if !wssWildcardPresent && !enableAutoWSS {
+			logger.Error(fmt.Sprintf("Invalid configuration, AutoTLS will be disabled: AutoTLS.Enabled=true requires a /tcp listener ending with %q to be present in Addresses.Swarm or AutoTLS.AutoWSS=true, see https://github.com/ipfs/kubo/blob/master/docs/config.md#autotls", wssWildcard))
+			enableAutoTLS = false
+		}
+	case enableAutoTLS && !enableTCPTransport:
+		logger.Error("Invalid configuration: AutoTLS.Enabled=true requires Swarm.Transports.Network.TCP to be true as well. AutoTLS will be disabled.")
+		enableAutoTLS = false
+	case enableAutoTLS && !enableWebsocketTransport:
+		logger.Error("Invalid configuration: AutoTLS.Enabled=true requires Swarm.Transports.Network.Websocket to be true as well. AutoTLS will be disabled.")
+		enableAutoTLS = false
 	}
 
 	// Gather all the options
 	opts := fx.Options(
 		BaseLibP2P,
 
+		// identify's AgentVersion (incl. optional agent-version-suffix)
+		fx.Provide(libp2p.UserAgent()),
+
+		// Services (resource management)
+		fx.Provide(libp2p.ResourceManager(bcfg.Repo.Path(), cfg.Swarm, userResourceOverrides)),
+		maybeProvide(libp2p.P2PForgeCertMgr(bcfg.Repo.Path(), cfg.AutoTLS, atlsLog), enableAutoTLS),
+		maybeInvoke(libp2p.StartP2PAutoTLS, enableAutoTLS),
 		fx.Provide(libp2p.AddrFilters(cfg.Swarm.AddrFilters)),
+		maybeInvoke(libp2p.MonitorDeadListeners(cfg.Addresses.Swarm, cfg.Swarm.AddrFilters, cfg.Addresses.NoAnnounce), cfg.Internal.DeadListenerCheck.WithDefault(config.DefaultDeadListenerCheck)),
+		maybeInvoke(libp2p.MonitorCGNAT(), cfg.Internal.CGNATCheck.WithDefault(config.DefaultCGNATCheck)),
 		fx.Provide(libp2p.AddrsFactory(cfg.Addresses.Announce, cfg.Addresses.AppendAnnounce, cfg.Addresses.NoAnnounce)),
 		fx.Provide(libp2p.SmuxTransport(cfg.Swarm.Transports)),
 		fx.Provide(libp2p.RelayTransport(enableRelayTransport)),
-		fx.Provide(libp2p.RelayService(cfg.Swarm.RelayService.Enabled.WithDefault(true), cfg.Swarm.RelayService)),
+		fx.Provide(libp2p.RelayService(enableRelayService, cfg.Swarm.RelayService)),
 		fx.Provide(libp2p.Transports(cfg.Swarm.Transports)),
-		fx.Invoke(libp2p.StartListening(cfg.Addresses.Swarm)),
-		fx.Invoke(libp2p.SetupDiscovery(cfg.Discovery.MDNS.Enabled, cfg.Discovery.MDNS.Interval)),
+		fx.Provide(libp2p.ListenOn(cfg.Addresses.Swarm)),
+		fx.Invoke(libp2p.SetupDiscovery(cfg.Discovery.MDNS.Enabled)),
 		fx.Provide(libp2p.ForceReachability(cfg.Internal.Libp2pForceReachability)),
-		fx.Provide(libp2p.StaticRelays(cfg.Swarm.RelayClient.StaticRelays)),
-		fx.Provide(libp2p.HolePunching(cfg.Swarm.EnableHolePunching, cfg.Swarm.RelayClient.Enabled.WithDefault(false))),
+		fx.Provide(libp2p.NonPublicAddrPublishing(cfg.Internal.NonPublicAddrPublishing)),
+		fx.Provide(libp2p.HolePunching(cfg.Swarm.EnableHolePunching, enableRelayClient)),
 
 		fx.Provide(libp2p.Security(!bcfg.DisableEncryptedConnections, cfg.Swarm.Transports)),
 
 		fx.Provide(libp2p.Routing),
-		fx.Provide(libp2p.BaseRouting(cfg.Experimental.AcceleratedDHTClient)),
+		fx.Provide(libp2p.ContentRouting),
+		fx.Provide(libp2p.ContentDiscovery),
+
+		fx.Provide(libp2p.BaseRouting(cfg)),
 		maybeProvide(libp2p.PubsubRouter, bcfg.getOpt("ipnsps")),
 
 		maybeProvide(libp2p.BandwidthCounter, !cfg.Swarm.DisableBandwidthMetrics),
 		maybeProvide(libp2p.NatPortMap, !cfg.Swarm.DisableNatPortMap),
-		maybeProvide(libp2p.AutoRelay(len(cfg.Swarm.RelayClient.StaticRelays) == 0), cfg.Swarm.RelayClient.Enabled.WithDefault(false)),
+		libp2p.MaybeAutoRelay(cfg.Swarm.RelayClient.StaticRelays, cfg.Peering, enableRelayClient),
 		autonat,
 		connmgr,
 		ps,
@@ -178,19 +240,27 @@ func LibP2P(bcfg *BuildCfg, cfg *config.Config) fx.Option {
 func Storage(bcfg *BuildCfg, cfg *config.Config) fx.Option {
 	cacheOpts := blockstore.DefaultCacheOpts()
 	cacheOpts.HasBloomFilterSize = cfg.Datastore.BloomFilterSize
+	cacheOpts.HasTwoQueueCacheSize = int(cfg.Datastore.BlockKeyCacheSize.WithDefault(config.DefaultBlockKeyCacheSize))
 	if !bcfg.Permanent {
 		cacheOpts.HasBloomFilterSize = 0
 	}
 
 	finalBstore := fx.Provide(GcBlockstoreCtor)
 	if cfg.Experimental.FilestoreEnabled || cfg.Experimental.UrlstoreEnabled {
-		finalBstore = fx.Provide(FilestoreBlockstoreCtor)
+		finalBstore = fx.Provide(FilestoreBlockstoreCtor(
+			cfg.Provide.Strategy.WithDefault(config.DefaultProvideStrategy),
+		))
 	}
 
 	return fx.Options(
 		fx.Provide(RepoConfig),
 		fx.Provide(Datastore),
-		fx.Provide(BaseBlockstoreCtor(cacheOpts, bcfg.NilRepo, cfg.Datastore.HashOnRead)),
+		fx.Provide(BaseBlockstoreCtor(
+			cacheOpts,
+			cfg.Datastore.HashOnRead,
+			cfg.Datastore.WriteThrough.WithDefault(config.DefaultWriteThrough),
+			cfg.Provide.Strategy.WithDefault(config.DefaultProvideStrategy),
+		)),
 		finalBstore,
 	)
 }
@@ -241,8 +311,7 @@ var IPNS = fx.Options(
 )
 
 // Online groups online-only units
-func Online(bcfg *BuildCfg, cfg *config.Config) fx.Option {
-
+func Online(bcfg *BuildCfg, cfg *config.Config, userResourceOverrides rcmgr.PartialLimitConfig) fx.Option {
 	// Namesys params
 
 	ipnsCacheSize := cfg.Ipns.ResolveCacheSize
@@ -250,7 +319,7 @@ func Online(bcfg *BuildCfg, cfg *config.Config) fx.Option {
 		ipnsCacheSize = DefaultIpnsCacheSize
 	}
 	if ipnsCacheSize < 0 {
-		return fx.Error(fmt.Errorf("cannot specify negative resolve cache size"))
+		return fx.Error(errors.New("cannot specify negative resolve cache size"))
 	}
 
 	// Republisher params
@@ -279,23 +348,32 @@ func Online(bcfg *BuildCfg, cfg *config.Config) fx.Option {
 		recordLifetime = d
 	}
 
-	/* don't provide from bitswap when the strategic provider service is active */
-	shouldBitswapProvide := !cfg.Experimental.StrategicProviding
+	isBitswapLibp2pEnabled := cfg.Bitswap.Libp2pEnabled.WithDefault(config.DefaultBitswapLibp2pEnabled)
+	isBitswapServerEnabled := cfg.Bitswap.ServerEnabled.WithDefault(config.DefaultBitswapServerEnabled)
+	isHTTPRetrievalEnabled := cfg.HTTPRetrieval.Enabled.WithDefault(config.DefaultHTTPRetrievalEnabled)
+
+	// The Provide system handles both new CID announcements and periodic
+	// re-announcements. Provide.Enabled=false fully disables it.
+	// Provide.DHT.Interval=0 disables only the periodic reprovide schedule;
+	// new CIDs still announce via fast-provide-root and 'ipfs provide once'.
+	isProviderEnabled := cfg.Provide.Enabled.WithDefault(config.DefaultProvideEnabled)
 
 	return fx.Options(
-		fx.Provide(OnlineExchange(cfg, shouldBitswapProvide)),
-		maybeProvide(Graphsync, cfg.Experimental.GraphsyncEnabled),
+		fx.Provide(BitswapOptions(cfg)),
+		fx.Provide(Bitswap(isBitswapServerEnabled, isBitswapLibp2pEnabled, isHTTPRetrievalEnabled)),
+		fx.Provide(OnlineExchange(isBitswapLibp2pEnabled)),
 		fx.Provide(DNSResolver),
-		fx.Provide(Namesys(ipnsCacheSize)),
+		fx.Provide(Namesys(ipnsCacheSize, cfg.Ipns.MaxCacheTTL.WithDefault(config.DefaultIpnsMaxCacheTTL))),
 		fx.Provide(Peering),
 		PeerWith(cfg.Peering.Peers...),
 
 		fx.Invoke(IpnsRepublisher(repubPeriod, recordLifetime)),
+		fx.Invoke(PurgeStaleDHTValueRecords),
 
 		fx.Provide(p2p.New),
 
-		LibP2P(bcfg, cfg),
-		OnlineProviders(cfg.Experimental.StrategicProviding, cfg.Experimental.AcceleratedDHTClient, cfg.Reprovider.Strategy, cfg.Reprovider.Interval),
+		LibP2P(bcfg, cfg, userResourceOverrides),
+		OnlineProviders(isProviderEnabled, cfg),
 	)
 }
 
@@ -304,24 +382,25 @@ func Offline(cfg *config.Config) fx.Option {
 	return fx.Options(
 		fx.Provide(offline.Exchange),
 		fx.Provide(DNSResolver),
-		fx.Provide(Namesys(0)),
-		fx.Provide(offroute.NewOfflineRouter),
-		OfflineProviders(cfg.Experimental.StrategicProviding, cfg.Experimental.AcceleratedDHTClient, cfg.Reprovider.Strategy, cfg.Reprovider.Interval),
+		fx.Provide(Namesys(0, 0)),
+		fx.Provide(libp2p.Routing),
+		fx.Provide(libp2p.ContentRouting),
+		fx.Provide(libp2p.OfflineRouting),
+		fx.Provide(libp2p.ContentDiscovery),
+		OfflineProviders(),
 	)
 }
 
 // Core groups basic IPFS services
 var Core = fx.Options(
-	fx.Provide(BlockService),
 	fx.Provide(Dag),
 	fx.Provide(FetcherConfig),
-	fx.Provide(Pinning),
-	fx.Provide(Files),
+	fx.Provide(PathResolverConfig),
 )
 
-func Networked(bcfg *BuildCfg, cfg *config.Config) fx.Option {
+func Networked(bcfg *BuildCfg, cfg *config.Config, userResourceOverrides rcmgr.PartialLimitConfig) fx.Option {
 	if bcfg.Online {
-		return Online(bcfg, cfg)
+		return Online(bcfg, cfg, userResourceOverrides)
 	}
 	return Offline(cfg)
 }
@@ -337,31 +416,58 @@ func IPFS(ctx context.Context, bcfg *BuildCfg) fx.Option {
 		return bcfgOpts // error
 	}
 
-	// Auto-sharding settings
-	shardSizeString := cfg.Internal.UnixFSShardingSizeThreshold.WithDefault("256kiB")
-	shardSizeInt, err := humanize.ParseBytes(shardSizeString)
+	userResourceOverrides, err := bcfg.Repo.UserResourceOverrides()
 	if err != nil {
 		return fx.Error(err)
 	}
-	uio.HAMTShardingSize = int(shardSizeInt)
 
 	// Migrate users of deprecated Experimental.ShardingEnabled flag
 	if cfg.Experimental.ShardingEnabled {
-		logger.Fatal("The `Experimental.ShardingEnabled` field is no longer used, please remove it from the config.\n" +
-			"go-ipfs now automatically shards when directory block is bigger than  `" + shardSizeString + "`.\n" +
-			"If you need to restore the old behavior (sharding everything) set `Internal.UnixFSShardingSizeThreshold` to `1B`.\n")
+		logger.Fatal("The `Experimental.ShardingEnabled` field is no longer used, please remove it from the config. Use Import.UnixFSHAMTDirectorySizeThreshold instead.")
 	}
+	if !cfg.Internal.UnixFSShardingSizeThreshold.IsDefault() {
+		msg := "The `Internal.UnixFSShardingSizeThreshold` field was renamed to `Import.UnixFSHAMTDirectorySizeThreshold`. Please update your config.\n"
+		if !cfg.Import.UnixFSHAMTDirectorySizeThreshold.IsDefault() {
+			logger.Fatal(msg) // conflicting values, hard fail
+		}
+		logger.Error(msg)
+		// Migrate the old OptionalString value to the new OptionalBytes field.
+		// Since OptionalBytes embeds OptionalString, we can construct it directly
+		// with the old value, preserving the user's original string (e.g., "256KiB").
+		cfg.Import.UnixFSHAMTDirectorySizeThreshold = config.OptionalBytes{OptionalString: *cfg.Internal.UnixFSShardingSizeThreshold}
+	}
+
+	// Validate Import configuration
+	if err := config.ValidateImportConfig(&cfg.Import); err != nil {
+		return fx.Error(err)
+	}
+
+	// Validate Provide configuration
+	if err := config.ValidateProvideConfig(&cfg.Provide); err != nil {
+		return fx.Error(err)
+	}
+
+	// Directory sharding settings from Import config.
+	// These globals affect both `ipfs add` and MFS (`ipfs files` API).
+	shardSizeThreshold := cfg.Import.UnixFSHAMTDirectorySizeThreshold.WithDefault(config.DefaultUnixFSHAMTDirectorySizeThreshold)
+	shardMaxFanout := cfg.Import.UnixFSHAMTDirectoryMaxFanout.WithDefault(config.DefaultUnixFSHAMTDirectoryMaxFanout)
+	uio.HAMTShardingSize = int(shardSizeThreshold)
+	uio.DefaultShardWidth = int(shardMaxFanout)
+	uio.HAMTSizeEstimation = cfg.Import.HAMTSizeEstimationMode()
+	merkledag.DefaultPBNodeFieldOrder = cfg.Import.PBNodeFieldOrderMode()
+
+	providerStrategy := cfg.Provide.Strategy.WithDefault(config.DefaultProvideStrategy)
 
 	return fx.Options(
 		bcfgOpts,
 
-		fx.Provide(baseProcess),
-
 		Storage(bcfg, cfg),
 		Identity(cfg),
 		IPNS,
-		Networked(bcfg, cfg),
-
+		Networked(bcfg, cfg, userResourceOverrides),
+		fx.Provide(BlockService(cfg)),
+		fx.Provide(Pinning(providerStrategy)),
+		fx.Provide(Files(providerStrategy)),
 		Core,
 	)
 }

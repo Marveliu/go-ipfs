@@ -2,27 +2,25 @@ package integrationtest
 
 import (
 	"bytes"
-	"context"
 	"testing"
 
 	blocks "github.com/ipfs/go-block-format"
 	"github.com/ipfs/go-cid"
-	"github.com/ipfs/go-ipfs/core"
-	coremock "github.com/ipfs/go-ipfs/core/mock"
-	"github.com/ipfs/go-ipfs/core/node/libp2p"
+	"github.com/ipfs/kubo/core"
+	coremock "github.com/ipfs/kubo/core/mock"
+	"github.com/ipfs/kubo/core/node/libp2p"
 	mocknet "github.com/libp2p/go-libp2p/p2p/net/mock"
 )
 
 func TestBitswapWithoutRouting(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	const numPeers = 4
 
 	// create network
-	mn := mocknet.New(ctx)
+	mn := mocknet.New()
 
 	var nodes []*core.IpfsNode
-	for i := 0; i < numPeers; i++ {
+	for range numPeers {
 		n, err := core.NewNode(ctx, &core.BuildCfg{
 			Online:  true,
 			Host:    coremock.MockHostOption(mn),

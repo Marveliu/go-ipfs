@@ -1,5 +1,5 @@
-// +build cgo,!noplugin
-// +build linux darwin freebsd
+// Plugin loading with cgo (uses dlopen to load .so plugins at runtime).
+//go:build (linux || darwin || freebsd) && cgo && !noplugin
 
 package loader
 
@@ -7,7 +7,7 @@ import (
 	"errors"
 	"plugin"
 
-	iplugin "github.com/ipfs/go-ipfs/plugin"
+	iplugin "github.com/ipfs/kubo/plugin"
 )
 
 func init() {

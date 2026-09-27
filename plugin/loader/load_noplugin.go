@@ -1,11 +1,12 @@
-// +build noplugin
+// No-op plugin loader when built with "go build -tags noplugin".
+//go:build noplugin
 
 package loader
 
 import (
 	"errors"
 
-	iplugin "github.com/ipfs/go-ipfs/plugin"
+	iplugin "github.com/ipfs/kubo/plugin"
 )
 
 func init() {

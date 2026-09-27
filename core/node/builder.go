@@ -4,19 +4,21 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
-	"errors"
+	"time"
 
 	"go.uber.org/fx"
 
-	"github.com/ipfs/go-ipfs/core/node/helpers"
-	"github.com/ipfs/go-ipfs/core/node/libp2p"
-	"github.com/ipfs/go-ipfs/repo"
+	"github.com/ipfs/boxo/autoconf"
+	"github.com/ipfs/kubo/core/node/helpers"
+	"github.com/ipfs/kubo/core/node/libp2p"
+	"github.com/ipfs/kubo/core/shutdown"
+	"github.com/ipfs/kubo/repo"
 
 	ds "github.com/ipfs/go-datastore"
 	dsync "github.com/ipfs/go-datastore/sync"
-	cfg "github.com/ipfs/go-ipfs-config"
-	"github.com/libp2p/go-libp2p-core/crypto"
-	peer "github.com/libp2p/go-libp2p-core/peer"
+	cfg "github.com/ipfs/kubo/config"
+	"github.com/libp2p/go-libp2p/core/crypto"
+	peer "github.com/libp2p/go-libp2p/core/peer"
 )
 
 type BuildCfg struct {
@@ -34,12 +36,14 @@ type BuildCfg struct {
 	// DO NOT SET THIS UNLESS YOU'RE TESTING.
 	DisableEncryptedConnections bool
 
-	// If NilRepo is set, a Repo backed by a nil datastore will be constructed
-	NilRepo bool
-
 	Routing libp2p.RoutingOption
 	Host    libp2p.HostOption
 	Repo    repo.Repo
+
+	// ShutdownTimeout caps how long node.Close()'s call to app.Stop is
+	// allowed to take. Zero disables the cap (app.Stop runs with no
+	// deadline, matching the legacy "wait forever" behavior).
+	ShutdownTimeout time.Duration
 }
 
 func (cfg *BuildCfg) getOpt(key string) bool {
@@ -51,18 +55,8 @@ func (cfg *BuildCfg) getOpt(key string) bool {
 }
 
 func (cfg *BuildCfg) fillDefaults() error {
-	if cfg.Repo != nil && cfg.NilRepo {
-		return errors.New("cannot set a Repo and specify nilrepo at the same time")
-	}
-
 	if cfg.Repo == nil {
-		var d ds.Datastore
-		if cfg.NilRepo {
-			d = ds.NewNullDatastore()
-		} else {
-			d = ds.NewMapDatastore()
-		}
-		r, err := defaultRepo(dsync.MutexWrap(d))
+		r, err := defaultRepo(dsync.MutexWrap(ds.NewMapDatastore()))
 		if err != nil {
 			return err
 		}
@@ -90,7 +84,7 @@ func (cfg *BuildCfg) options(ctx context.Context) (fx.Option, *cfg.Config) {
 	repoOption := fx.Provide(func(lc fx.Lifecycle) repo.Repo {
 		lc.Append(fx.Hook{
 			OnStop: func(ctx context.Context) error {
-				return cfg.Repo.Close()
+				return shutdown.CloseWithCtx(ctx, "repo", cfg.Repo.Close)
 			},
 		})
 
@@ -139,9 +133,9 @@ func defaultRepo(dstore repo.Datastore) (repo.Repo, error) {
 		return nil, err
 	}
 
-	c.Bootstrap = cfg.DefaultBootstrapAddresses
-	c.Addresses.Swarm = []string{"/ip4/0.0.0.0/tcp/4001", "/ip4/0.0.0.0/udp/4001/quic"}
-	c.Identity.PeerID = pid.Pretty()
+	c.Bootstrap = autoconf.FallbackBootstrapPeers
+	c.Addresses.Swarm = []string{"/ip4/0.0.0.0/tcp/4001", "/ip4/0.0.0.0/udp/4001/quic-v1"}
+	c.Identity.PeerID = pid.String()
 	c.Identity.PrivKey = base64.StdEncoding.EncodeToString(privkeyb)
 
 	return &repo.Mock{

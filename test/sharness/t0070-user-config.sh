@@ -11,10 +11,10 @@ test_description="Test user-provided config values"
 test_init_ipfs
 
 test_expect_success "bootstrap doesn't overwrite user-provided config keys (top-level)" '
-  ipfs config Foo.Bar baz &&
+  ipfs config Version.AgentSuffix foo &&
   ipfs bootstrap rm --all &&
-  echo "baz" >expected &&
-  ipfs config Foo.Bar >actual &&
+  echo "foo" >expected &&
+  ipfs config Version.AgentSuffix >actual &&
   test_cmp expected actual
 '
 
